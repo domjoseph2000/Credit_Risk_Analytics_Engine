@@ -1,0 +1,56 @@
+# docker-compose.yml
+# ─────────────────────────────────────────────────────────────────────────────
+# Convenience wrapper for local development.
+#
+# Usage:
+#   docker compose up --build
+#   Then open http://localhost:8080 (admin / admin)
+#   Trigger the DAG: Airflow UI → DAGs → homecredit_preprocessing → Trigger
+#
+# Set DATA_PATH to point at your local data directory:
+#   DATA_PATH=/your/path docker compose up --build
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  pipeline:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: homecredit-pipeline:latest
+    container_name: homecredit_pipeline
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount your data directory (Parquet files and Notebook logs will sync here)
+      - "${DATA_PATH:-./data}:/data"
+      
+      # Mount your source code (The 7 Jupyter Notebooks live here)
+      - "${SRC_PATH:-./src}:/src"
+      
+      # The Live-Sync Bridge (Your Python DAG updates instantly)
+      - "./dags:/opt/airflow/dags"
+      
+      # Persist Airflow state (The SQLite database lives here)
+      - airflow_db:/opt/airflow
+    environment:
+      HOMECREDIT_DATA_ROOT: /data
+      HOMECREDIT_NB_DIR: /src/Preprocess/notebooks
+      AIRFLOW_ADMIN_USER: admin
+      AIRFLOW_ADMIN_PASSWORD: admin
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      #LocalExecutor #SequentialExecutor is strict requirement for using a local SQLite database.
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "True"
+      AIRFLOW__WEBSERVER__WEB_SERVER_WORKER_TIMEOUT: 300
+      
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  airflow_db:
+  notebook_outputs:
