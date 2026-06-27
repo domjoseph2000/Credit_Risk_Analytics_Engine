@@ -3,7 +3,7 @@ Home Credit – Preprocessing Pipeline DAG
 =========================================
 Orchestrates the full feature-engineering pipeline for the Home Credit
 default-prediction project. Each task executes one Jupyter notebook via
-papermill and writes its output to /data/src/intermediate/.
+papermill and writes its output to /data/Staging/.
 
 Dependency graph
 ----------------
@@ -49,11 +49,12 @@ VAR_SEL_DIR = os.path.join(SRC_DIR, "Variable-Selection")
 OUTPUT_DIR  = os.path.join(DATA_ROOT, "Staging")
 NB_OUT_DIR  = os.path.join(DATA_ROOT, "notebook_outputs")
 
- # Create the base folders
+ # Create the output folders
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-os.makedirs(NB_DIR, exist_ok=True)
-os.makedirs(VAR_SEL_DIR, exist_ok=True)
 os.makedirs(NB_OUT_DIR, exist_ok=True)
+#os.makedirs(NB_DIR, exist_ok=True)
+#os.makedirs(VAR_SEL_DIR, exist_ok=True)
+
 
 # Notebook filename map
 NOTEBOOKS = {
@@ -119,7 +120,7 @@ with DAG(
     description="Home Credit feature engineering pipeline",
     default_args=DEFAULT_ARGS,
     start_date=datetime(2024, 1, 1),
-    schedule_interval=None,          # triggered manually or by upstream event
+    schedule=None,          # triggered manually or by upstream event
     catchup=False,
     max_active_runs=1,
     tags=["homecredit", "preprocessing", "feature-engineering"],

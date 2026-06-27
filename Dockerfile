@@ -30,7 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # ── Python dependencies ───────────────────────────────────────────────────────
 # Pin Airflow to a stable release; extras: celery not needed for standalone.
-ENV AIRFLOW_VERSION=2.9.3
+ENV AIRFLOW_VERSION=3.2.2
 ENV PYTHON_VERSION=3.12
 ENV CONSTRAINT_URL="https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
 
@@ -38,12 +38,15 @@ RUN pip install --no-cache-dir --upgrade pip
 
 # Data science stack
 RUN pip install --no-cache-dir \
-        pandas==2.2.2 \
+        pandas==2.3.1 \
         numpy==1.26.4 \
-        scipy==1.13.1 \
-        scikit-learn==1.5.0 \
-        pyarrow==16.1.0 \
-        openpyxl==3.1.4
+        scipy==1.16.1 \
+        scikit-learn==1.7.1 \
+        pyarrow==21.0.0 \
+        openpyxl==3.1.5 \
+        lightgbm==4.6.0 \
+        matplotlib==3.10.5 \
+        mlflow==3.12.0
 
 # Notebook execution
 RUN pip install --no-cache-dir \
@@ -62,9 +65,8 @@ RUN python -m ipykernel install --name python3 --display-name "Python 3"
 # ── Application files ─────────────────────────────────────────────────────────
 WORKDIR /app
 
-COPY src/Preprocess/notebooks/   /app/notebooks/
-COPY src/Variable-Selection/   /app/variable_selection/
-COPY scripts/     /app/scripts/
+COPY src/         ./src/
+COPY scripts/     ./scripts/
 COPY dags/        /opt/airflow/dags/
 
 RUN chmod +x /app/scripts/entrypoint.sh
@@ -89,13 +91,7 @@ ENV AIRFLOW_ADMIN_PASSWORD=admin
 # Mount your project data here:
 #   docker run -v /your/local/data:/data ...
 # Expected layout under /data:
-#   /data/data/Input/application_train.csv
-#   /data/data/Input/POS_CASH_balance.csv
-#   /data/data/Input/credit_card_balance.csv
-#   /data/data/Input/installments_payments.csv
-#   /data/data/Input/previous_application.csv
-#   /data/data/Input/bureau.csv
-#   /data/data/Input/bureau_balance.csv
+
 VOLUME ["/data"]
 
 # ── Ports ─────────────────────────────────────────────────────────────────────

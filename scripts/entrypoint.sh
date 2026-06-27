@@ -11,11 +11,19 @@ echo "NB_DIR    : ${HOMECREDIT_NB_DIR:-/src/Preprocess/notebooks}"
 
 # 1. Create Data/Output directories
 mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/Staging"
+mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/ModelDataset"
+mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/HyperParameters"
+mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/ModelOutput"
 mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/notebook_outputs"
+mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/mlruns"
+
 
 # 2. Create Source/Logic directories
 mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/Preprocess/notebooks"
 mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/Variable-Selection"
+mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/MDS-Creation"
+mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/Hyperparameter-Tuning"
+mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/Model-Training"
 
 # 3. Initialise Airflow DB on first run
 echo ""
@@ -26,8 +34,8 @@ airflow db migrate
 airflow users create \
     --username "${AIRFLOW_ADMIN_USER:-admin}" \
     --password "${AIRFLOW_ADMIN_PASSWORD:-admin}" \
-    --firstname "Home" \
-    --lastname  "Credit" \
+    --firstname "Jane" \
+    --lastname  "Doe" \
     --role      "Admin" \
     --email     "admin@homecredit.local" \
     2>/dev/null || true
