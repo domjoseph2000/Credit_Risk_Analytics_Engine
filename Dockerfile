@@ -46,7 +46,9 @@ RUN pip install --no-cache-dir \
         openpyxl==3.1.5 \
         lightgbm==4.6.0 \
         matplotlib==3.10.5 \
-        mlflow==3.12.0
+        mlflow==3.12.0 \
+        hyperopt==0.2.7 \
+        setuptools==78.1.1
 
 # Notebook execution
 RUN pip install --no-cache-dir \

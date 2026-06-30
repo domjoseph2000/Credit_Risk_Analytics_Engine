@@ -11,7 +11,11 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.operators.empty import EmptyOperator
 from airflow.operators.trigger_dagrun import TriggerDagRunOperator
+from airflow.models.param import Param
+from airflow.decorators import task
 import papermill as pm
+
+execution_timeout=timedelta(hours=6)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 # 1. Define your Root Environment Variables
@@ -26,6 +30,12 @@ DEFAULT_ARGS = {
     "email_on_failure": False,
     "email_on_retry"  : False,
 }
+
+UI_PARAMS = Param(
+        default=True, 
+        type="boolean", 
+        description="Run the Model Training after tuning? Default is True"
+    )
 
 # ── Papermill runner ──────────────────────────────────────────────────────────
 def run_notebook(task_id: str, model_folder: str, nb_name: str, **context) -> None:
@@ -65,14 +75,30 @@ with DAG(
     # CRITICAL: Even with schedule_interval=None, Airflow requires a start_date.
     start_date=datetime(2024, 1, 1),
     schedule=None, # Triggered by the Prep DAG
+    params = {"trigger_training": UI_PARAMS},
     max_active_runs=1,
     catchup=False
 ) as dag:
+    
+    @task.branch
+    def check_if_should_train(**context):
+        # 2. Check the value of the toggle switch
+        should_train = context["params"]["trigger_training"]
+        
+        if should_train:
+            return "trigger_model_training" # Go to the trigger task
+        else:
+            return "skip_training"        # Go to a dummy end task
+    
+    # Instantiate the tasks
+    branch_task = check_if_should_train()
+    skip_training = EmptyOperator(task_id="skip_training")
 
     # --- THE FAN OUT (Train 3 models) ---
     task_tune_lgb = PythonOperator(
         task_id="tune_lightgbm",
         python_callable=run_notebook,
+        execution_timeout=execution_timeout,
         op_kwargs={
             "task_id": "tune_lgb", 
             "model_folder": "LightGBM_v1", 
@@ -107,4 +133,4 @@ with DAG(
     )
 
     # Dependencies in Data Prep DAG
-    task_tune_lgb >> trigger_training_pipeline
+    task_tune_lgb >> branch_task >> [trigger_training_pipeline, skip_training]

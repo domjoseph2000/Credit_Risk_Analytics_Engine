@@ -10,6 +10,8 @@ import os
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.operators.empty import EmptyOperator
+from airflow.models.param import Param
+from airflow.decorators import task
 from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 import papermill as pm
 
@@ -27,6 +29,13 @@ DEFAULT_ARGS = {
     "email_on_retry"  : False,
 }
 
+UI_PARAMS = {
+        "run_hyperopt": Param(
+            default=False, 
+            type="boolean", 
+            description="Perform Hyperparameter tuning after MDS creation? If False, the pipeline will proceed to model training using default hyperparameters"
+    )
+}
 # ── Papermill runner ──────────────────────────────────────────────────────────
 def run_notebook(task_id: str, nb_name: str, **context) -> None:
     """
@@ -64,12 +73,13 @@ with DAG(
     default_args=DEFAULT_ARGS,
     # CRITICAL: Even with schedule_interval=None, Airflow requires a start_date.
     start_date=datetime(2024, 1, 1),
+    params=UI_PARAMS,
     schedule=None, # Triggered by the Prep DAG
     max_active_runs=1,
     catchup=False
 ) as dag:
 
-    # --- THE FAN OUT (Train 3 models) ---
+    # 1. MDS creation task
     task_create_mds = PythonOperator(
         task_id="create_mds",
         python_callable=run_notebook,
@@ -79,12 +89,31 @@ with DAG(
         }
     )
 
+    # 2. The Branching Logic
+    @task.branch
+    def choose_path(**context):
+        if context["params"]["run_hyperopt"]:
+            return "trigger_model_tuning_dag"
+        else:
+            return "trigger_training_dag"
+
+    branch_task = choose_path()
+
+    # 3. Path A: Trigger Hyperopt
     # This goes at the bottom of your Data Prep DAG
     trigger_tuning_pipeline = TriggerDagRunOperator(
-        task_id="trigger_model_tuning",
+        task_id="trigger_model_tuning_dag",
         trigger_dag_id="homecredit_model_tuning", # The exact name of model training DAG
         wait_for_completion=False # Set to True if you want Prep to wait until Training finishes
     )
 
+    # 4. Path B: Trigger Training directly
+    trigger_training_pipeline = TriggerDagRunOperator(
+        task_id="trigger_training_dag",
+        trigger_dag_id="homecredit_model_training"
+    )
+
+
+
     # Dependencies in Data Prep DAG
-    task_create_mds >> trigger_tuning_pipeline
+    task_create_mds >> branch_task >> [trigger_tuning_pipeline, trigger_training_pipeline]
