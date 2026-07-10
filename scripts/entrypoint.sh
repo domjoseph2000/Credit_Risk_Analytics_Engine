@@ -14,6 +14,7 @@ mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/Staging"
 mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/ModelDataset"
 mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/HyperParameters"
 mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/ModelOutput"
+mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/Variable-Selection"
 mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/notebook_outputs"
 mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/mlruns"
 
@@ -24,6 +25,7 @@ mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/Variable-Selection"
 mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/MDS-Creation"
 mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/Hyperparameter-Tuning"
 mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/Model-Training"
+mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/Scoring"
 
 # 3. Initialise Airflow DB on first run
 echo ""
