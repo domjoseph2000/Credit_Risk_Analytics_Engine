@@ -1,0 +1,12 @@
+pandas>=2.0
+numpy>=1.24
+lightgbm>=4.0
+mlflow>=2.9
+openpyxl>=3.1
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.0
+email-validator>=2.0  # transitive requirement of fastapi's pydantic models, not auto-installed
+pyarrow>=14.0
+apache-airflow>=2.8  # only needed on the Airflow worker image, not the API image
+pytest>=8.0

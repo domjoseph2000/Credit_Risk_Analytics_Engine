@@ -5,7 +5,7 @@
 # Usage:
 #   docker compose up --build
 #   Then open http://localhost:8080 (admin / admin)
-#   Trigger the DAG: Airflow UI → DAGs → homecredit_preprocessing → Trigger
+#   Trigger the DAG: Airflow UI → DAGs → 01_preprocessing → Trigger
 #
 # Set DATA_PATH to point at your local data directory:
 #   DATA_PATH=/your/path docker compose up --build
@@ -34,12 +34,24 @@ services:
       - airflow_db:/opt/airflow
     environment:
       HOMECREDIT_DATA_ROOT: /data
-      HOMECREDIT_NB_DIR: /src/Preprocess/notebooks
       AIRFLOW_ADMIN_USER: admin
       AIRFLOW_ADMIN_PASSWORD: admin
       AIRFLOW__CORE__LOAD_EXAMPLES: "False"
-      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
-      #LocalExecutor #SequentialExecutor is strict requirement for using a local SQLite database.
+      # Airflow 3.x removed SequentialExecutor -- it's silently rewritten to
+      # LocalExecutor at config-load time regardless of what's set here. Made
+      # explicit below, and constrained to run one task at a time since the
+      # local SQLite metadata DB doesn't handle concurrent writes safely
+      # (LocalExecutor's default parallelism=32 caused racy task-state writes
+      # and missed heartbeats under load -- see task_instance_heartbeat_timeout
+      # below).
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__PARALLELISM: 1
+      AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: 1
+      # Default is 300s -- too short for long-running notebook tasks (e.g. the
+      # hyperparameter-tuning DAG's 150-eval Hyperopt search), which can go
+      # quiet long enough under CPU load to get killed as a zombie task even
+      # though they're still working. Raised to 30 minutes.
+      AIRFLOW__SCHEDULER__TASK_INSTANCE_HEARTBEAT_TIMEOUT: 1800
       AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "True"
       AIRFLOW__WEBSERVER__WEB_SERVER_WORKER_TIMEOUT: 300
       

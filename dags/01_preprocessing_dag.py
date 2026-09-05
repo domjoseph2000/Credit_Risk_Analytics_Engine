@@ -3,7 +3,7 @@ Home Credit – Preprocessing Pipeline DAG
 =========================================
 Orchestrates the full feature-engineering pipeline for the Home Credit
 default-prediction project. Each task executes one Jupyter notebook via
-papermill and writes its output to /data/Staging/.
+papermill and writes its output to /data/Model-Training/Staging/.
 
 Dependency graph
 ----------------
@@ -17,13 +17,21 @@ Dependency graph
     bureau.csv               ► task_bureau  ───────────────┐
     bureau_balance.csv   ────┘                             │
                                                            ▼
-    (all above) ─────────────────────────────────────► task_select_vars
+    (all above) ─────────────────────────────────────► branch_task
+                                                           │
+                                    trigger_variable_selection param
+                                           ┌───────true───────┐false
+                                           ▼                   ▼
+                              trigger_variable_selection   skip_variable_selection
+                              (runs 02_variable_selection)
 
 Parallel execution
 ------------------
 Stage 1  (no deps)  : task_application, task_prevloans, task_bureau
 Stage 2  (needs prevloans) : task_pos, task_creditcard, task_installments
-Stage 3  (needs all)      : task_select_vars
+Stage 3  (needs all)      : branch on `trigger_variable_selection` param,
+                             which by default triggers the `02_variable_selection`
+                             DAG (was `task_select_vars` in this DAG).
 """
 
 from __future__ import annotations
@@ -32,7 +40,11 @@ import os
 from datetime import datetime, timedelta
 
 from airflow import DAG
+from airflow.decorators import task
+from airflow.models.param import Param
+from airflow.operators.empty import EmptyOperator
 from airflow.operators.python import PythonOperator
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 from airflow.utils.trigger_rule import TriggerRule
 
 import papermill as pm
@@ -43,17 +55,15 @@ DATA_ROOT   = os.environ.get("HOMECREDIT_DATA_ROOT", "/data")
 SRC_DIR     = os.environ.get("HOMECREDIT_SRC_DIR",   "/src")
 
 # 2. Build your nested paths dynamically
-NB_DIR      = os.path.join(SRC_DIR, "Preprocess", "notebooks")
-VAR_SEL_DIR = os.path.join(SRC_DIR, "Variable-Selection")
+NB_DIR      = os.path.join(SRC_DIR, "Preprocess")
 
-OUTPUT_DIR  = os.path.join(DATA_ROOT, "Staging")
-NB_OUT_DIR  = os.path.join(DATA_ROOT, "notebook_outputs")
+OUTPUT_DIR  = os.path.join(DATA_ROOT, "Model-Training", "Staging")
+NB_OUT_DIR  = os.path.join(DATA_ROOT, "Model-Training", "notebook_outputs")
 
  # Create the output folders
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(NB_OUT_DIR, exist_ok=True)
 #os.makedirs(NB_DIR, exist_ok=True)
-#os.makedirs(VAR_SEL_DIR, exist_ok=True)
 
 
 # Notebook filename map
@@ -64,7 +74,6 @@ NOTEBOOKS = {
     "creditcard"    : "CreditCard_data.ipynb",
     "installments"  : "Payment_installments_data.ipynb",
     "bureau"        : "Bureau_data.ipynb",
-    "select_vars"   : "select_vars.ipynb",
 }
 
 # ── Default args ──────────────────────────────────────────────────────────────
@@ -75,6 +84,16 @@ DEFAULT_ARGS = {
     "retry_delay"     : timedelta(minutes=5),
     "email_on_failure": False,
     "email_on_retry"  : False,
+}
+
+UI_PARAMS = {
+    "trigger_variable_selection": Param(
+        default=True,
+        type="boolean",
+        title="Trigger variable selection?",
+        description="If true (default), triggers the 02_variable_selection DAG once "
+        "all preprocessing tasks finish. Set to false to stop after preprocessing.",
+    )
 }
 
 # ── Papermill runner ──────────────────────────────────────────────────────────
@@ -88,17 +107,9 @@ def run_notebook(task_id: str, **context) -> None:
     """
     nb_name = NOTEBOOKS[task_id]
 
-    # The Traffic Cop: Route using LOCAL variables so we don't confuse Python
-    if task_id == "select_vars": 
-        current_nb_dir  = VAR_SEL_DIR
-        current_out_dir = NB_OUT_DIR
-    else:
-        current_nb_dir  = NB_DIR
-        current_out_dir = NB_OUT_DIR
-
-    input_nb   = os.path.join(current_nb_dir, nb_name)
+    input_nb   = os.path.join(NB_DIR, nb_name)
     run_date   = context.get("ds_nodash") or datetime.now().strftime("%Y%m%d")
-    output_nb  = os.path.join(current_out_dir, f"{task_id}__{run_date}.ipynb")
+    output_nb  = os.path.join(NB_OUT_DIR, f"{task_id}__{run_date}.ipynb")
 
     print(f"[{task_id}] Running: {input_nb}")
     print(f"[{task_id}] Output : {output_nb}")
@@ -116,11 +127,12 @@ def run_notebook(task_id: str, **context) -> None:
 
 # ── DAG definition ────────────────────────────────────────────────────────────
 with DAG(
-    dag_id="homecredit_preprocessing",
+    dag_id="01_preprocessing",
     description="Home Credit feature engineering pipeline",
     default_args=DEFAULT_ARGS,
     start_date=datetime(2024, 1, 1),
     schedule=None,          # triggered manually or by upstream event
+    params=UI_PARAMS,
     catchup=False,
     max_active_runs=1,
     tags=["homecredit", "preprocessing", "feature-engineering"],
@@ -210,33 +222,39 @@ with DAG(
         """,
     )
 
-    # ── Stage 3: depends on all Stage 1 + Stage 2 tasks ──────────────────────
+    # ── Stage 3: branch on whether to trigger variable selection ─────────────
 
-    task_select_vars = PythonOperator(
-        task_id="task_select_vars",
-        python_callable=run_notebook,
-        op_kwargs={"task_id": "select_vars"},
-        trigger_rule=TriggerRule.ALL_SUCCESS,
-        doc_md="""
-        **Variable Selection**
-        Loads all processed parquets, computes per-feature AUC, t-test,
-        Cohen's d, univariate logistic coefficient, VIF, and target
-        correlation. Scores each feature and writes results to Excel.
-        Output: `src/Variable-Selection/numeric_selection_metrics_full_df.xlsx`
-        """,
+    @task.branch(trigger_rule=TriggerRule.ALL_SUCCESS)
+    def choose_path(**context):
+        if context["params"]["trigger_variable_selection"]:
+            return "trigger_variable_selection"
+        return "skip_variable_selection"
+
+    branch_task = choose_path()
+
+    trigger_variable_selection = TriggerDagRunOperator(
+        task_id="trigger_variable_selection",
+        trigger_dag_id="02_variable_selection",
+        wait_for_completion=False,
     )
+
+    skip_variable_selection = EmptyOperator(task_id="skip_variable_selection")
 
     # ── Wire up dependencies ──────────────────────────────────────────────────
     #
     #  Stage 1 (parallel)         Stage 2 (parallel)        Stage 3
     #  ──────────────────         ──────────────────        ───────
-    #  task_application ──────────────────────────────────► task_select_vars
-    #  task_prevloans   ──► task_pos           ───────────► task_select_vars
-    #                   └──► task_creditcard   ───────────► task_select_vars
-    #                   └──► task_installments ───────────► task_select_vars
-    #  task_bureau ───────────────────────────────────────► task_select_vars
-    # 1. Independent tables run straight to the end
-    [task_application, task_bureau] >> task_select_vars
+    #  task_application ──────────────────────────────────► branch_task
+    #  task_prevloans   ──► task_pos           ───────────► branch_task
+    #                   └──► task_creditcard   ───────────► branch_task
+    #                   └──► task_installments ───────────► branch_task
+    #  task_bureau ───────────────────────────────────────► branch_task
+    #  branch_task ──► trigger_variable_selection | skip_variable_selection
+    # 1. Independent tables run straight to the branch
+    [task_application, task_bureau] >> branch_task
 
     # 2. Dependent tables run through their sequence
-    task_prevloans >> [task_pos, task_creditcard, task_installments] >> task_select_vars
+    task_prevloans >> [task_pos, task_creditcard, task_installments] >> branch_task
+
+    # 3. Branch to either trigger or skip variable selection
+    branch_task >> [trigger_variable_selection, skip_variable_selection]

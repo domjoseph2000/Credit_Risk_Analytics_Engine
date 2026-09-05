@@ -7,25 +7,28 @@ set -euo pipefail
 echo "=== Home Credit Pipeline — Container Start ==="
 echo "DATA_ROOT : ${HOMECREDIT_DATA_ROOT:-/data}"
 echo "SRC_DIR   : ${HOMECREDIT_SRC_DIR:-/src}"
-echo "NB_DIR    : ${HOMECREDIT_NB_DIR:-/src/Preprocess/notebooks}"
 
 # 1. Create Data/Output directories
-mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/Staging"
-mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/ModelDataset"
-mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/HyperParameters"
-mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/ModelOutput"
-mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/Variable-Selection"
-mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/notebook_outputs"
+mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/Input"
+mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/Model-Training/Staging"
+mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/Model-Training/ModelDataset"
+mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/Model-Training/HyperParameters"
+mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/Model-Training/ModelOutput"
+mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/Model-Training/ScoreOutput"
+mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/Model-Training/Variable-Selection"
+mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/Model-Training/notebook_outputs"
 mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/mlruns"
+mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/Inference"
 
 
 # 2. Create Source/Logic directories
-mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/Preprocess/notebooks"
+mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/Preprocess"
 mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/Variable-Selection"
 mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/MDS-Creation"
 mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/Hyperparameter-Tuning"
 mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/Model-Training"
 mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/Scoring"
+mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/Inference"
 
 # 3. Initialise Airflow DB on first run
 echo ""

@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Technical Architecture Diagram</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Lucide Icons for technical symbols -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Marked.js for rendering Gemini Markdown output -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0b0f19; /* Very dark blue/black background */
+            color: #e2e8f0;
+        }
+
+        /* Custom scrollbar for better appearance if needed */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1e293b;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #475569;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #64748b;
+        }
+
+        /* Connecting lines container */
+        .svg-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        path {
+            stroke-dasharray: 4;
+            animation: dash 20s linear infinite;
+        }
+
+        @keyframes dash {
+            to {
+                stroke-dashoffset: -1000;
+            }
+        }
+    </style>
+</head>
+<body class="min-h-screen p-4 md:p-8 flex items-center justify-center">
+
+    <div class="relative w-full max-w-[1400px] bg-[#111827] border border-gray-800 rounded-xl shadow-2xl overflow-hidden p-6 md:p-10 flex flex-col xl:flex-row gap-12">
+        
+        <!-- SVG overlay for connecting lines (drawn via JS later) -->
+        <svg class="svg-overlay" id="connections-svg">
+            <!-- Markers for arrows -->
+            <defs>
+                <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#60a5fa" />
+                </marker>
+                <marker id="arrowhead-purple" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#c084fc" />
+                </marker>
+                <marker id="arrowhead-green" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                    <polygon points="0 0, 10 3.5, 0 7" fill="#34d399" />
+                </marker>
+            </defs>
+        </svg>
+
+        <!-- ==================== TRAINING SIDE ==================== -->
+        <div class="flex-1 flex flex-col gap-6" id="training-zone">
+            
+            <div class="flex items-center gap-3 mb-2 border-b border-gray-700 pb-2">
+                <i data-lucide="server-cog" class="w-6 h-6 text-blue-400"></i>
+                <h2 class="text-xl font-semibold tracking-wide text-gray-200">TRAINING ENVIRONMENT</h2>
+            </div>
+
+            <!-- Top Row: Data & Staging -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 relative">
+                
+                <!-- Data Input -->
+                <div id="box-data-input" class="bg-gray-800/50 border border-gray-700 rounded-lg p-5 z-20 hover:border-blue-500/50 transition-colors">
+                    <div class="flex items-center gap-2 mb-3">
+                        <i data-lucide="database" class="w-5 h-5 text-blue-400"></i>
+                        <h3 class="font-medium text-blue-100">Data Input</h3>
+                    </div>
+                    <div class="bg-gray-900 rounded p-3 text-sm font-mono text-gray-400">
+                        <div class="text-blue-300 mb-2">data/Input/*.csv</div>
+                        <ul class="list-none space-y-1 pl-2 border-l-2 border-gray-700">
+                            <li>application_train.csv</li>
+                            <li>bureau.csv</li>
+                            <li>bureau_balance.csv</li>
+                            <li>previous_application.csv</li>
+                            <li>POS_CASH_balance.csv</li>
+                            <li>installments_payments.csv</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Staging -->
+                <div class="flex flex-col gap-6">
+                    <div id="box-preprocess" class="bg-gray-800/50 border border-gray-700 rounded-lg p-5 z-20 hover:border-blue-500/50 transition-colors">
+                        <div class="flex items-center gap-2 mb-3">
+                            <i data-lucide="cog" class="w-5 h-5 text-teal-400"></i>
+                            <h3 class="font-medium text-teal-100">Preprocessing</h3>
+                        </div>
+                        <div class="bg-gray-900 rounded p-3 text-sm font-mono text-gray-400 truncate" title="src/Preprocess/*.ipynb">
+                            src/Preprocess/*.ipynb
+                        </div>
+                    </div>
+
+                    <div id="box-staging" class="bg-gray-800/50 border border-gray-700 rounded-lg p-5 z-20 hover:border-blue-500/50 transition-colors mt-auto">
+                        <div class="flex items-center gap-2 mb-3">
+                            <i data-lucide="hard-drive" class="w-5 h-5 text-indigo-400"></i>
+                            <h3 class="font-medium text-indigo-100">Staging Data</h3>
+                        </div>
+                        <div class="bg-gray-900 rounded p-3 text-sm font-mono text-gray-400 text-wrap break-all">
+                            data/Model-Training/Staging/*.parquet
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Middle Row: Pipeline Steps -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 relative">
+                
+                <!-- Pipeline Column 1 -->
+                <div class="flex flex-col gap-4">
+                    <div id="box-var-select-1" class="bg-gray-800/50 border border-gray-700 rounded-lg p-4 z-20 hover:border-purple-500/50 transition-colors">
+                        <div class="flex items-center gap-2 mb-2">
+                            <i data-lucide="list-filter" class="w-4 h-4 text-purple-400"></i>
+                            <h3 class="font-medium text-purple-100 text-sm">Variable Selection (Scoring)</h3>
+                        </div>
+                        <div class="bg-gray-900 rounded p-2 text-xs font-mono text-gray-400 break-all">
+                            src/Variable-Selection/select_vars.ipynb
+                        </div>
+                    </div>
+
+                    <div id="box-mds" class="bg-gray-800/50 border border-gray-700 rounded-lg p-4 z-20 hover:border-purple-500/50 transition-colors">
+                        <div class="flex items-center gap-2 mb-2">
+                            <i data-lucide="file-json-2" class="w-4 h-4 text-purple-400"></i>
+                            <h3 class="font-medium text-purple-100 text-sm">MDS Creation</h3>
+                        </div>
+                        <div class="bg-gray-900 rounded p-2 text-xs font-mono text-gray-400 break-all">
+                            src/MDS-Creation/model_dataset_creation.ipynb
+                        </div>
+                    </div>
+
+                     <div id="box-model-dataset" class="bg-gray-800/50 border border-gray-700 rounded-lg p-4 z-20 hover:border-blue-500/50 transition-colors">
+                        <div class="flex items-center gap-2 mb-2">
+                            <i data-lucide="database-zap" class="w-4 h-4 text-blue-400"></i>
+                            <h3 class="font-medium text-blue-100 text-sm">Model Dataset</h3>
+                        </div>
+                        <div class="bg-gray-900 rounded p-2 text-xs font-mono text-gray-400 break-all">
+                            data/Model-Training/ModelDataset/model_dataset_{initial,final}.parquet
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Pipeline Column 2 -->
+                <div class="flex flex-col gap-4">
+                    <div id="box-var-select-2" class="bg-gray-800/50 border border-gray-700 rounded-lg p-4 z-20 hover:border-purple-500/50 transition-colors">
+                        <div class="flex items-center gap-2 mb-2">
+                            <i data-lucide="git-merge" class="w-4 h-4 text-purple-400"></i>
+                            <h3 class="font-medium text-purple-100 text-sm">Multicollinearity Reduction (VIF)</h3>
+                        </div>
+                        <div class="bg-gray-900 rounded p-2 text-xs font-mono text-gray-400 break-all">
+                            src/Variable-Selection/01b_multicollinearity_reduction.ipynb
+                        </div>
+                    </div>
+
+                    <div id="box-tuning" class="bg-gray-800/50 border border-gray-700 rounded-lg p-4 z-20 hover:border-orange-500/50 transition-colors">
+                        <div class="flex items-center gap-2 mb-2">
+                            <i data-lucide="sliders-horizontal" class="w-4 h-4 text-orange-400"></i>
+                            <h3 class="font-medium text-orange-100 text-sm">Hyperparameter Tuning (Hyperopt)</h3>
+                        </div>
+                        <div class="bg-gray-900 rounded p-2 text-xs font-mono text-gray-400 break-all">
+                            src/Hyperparameter-Tuning/LightGBM_v1/*.ipynb
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Bottom Row: Training & Registry -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 relative">
+                 <div id="box-training" class="bg-[#1e293b] border-2 border-emerald-500/30 rounded-lg p-5 z-20 shadow-[0_0_15px_rgba(16,185,129,0.1)] hover:border-emerald-500/60 transition-colors">
+                    <div class="flex items-center gap-2 mb-3">
+                        <i data-lucide="brain-circuit" class="w-5 h-5 text-emerald-400"></i>
+                        <h3 class="font-medium text-emerald-100">Model Training</h3>
+                    </div>
+                    <div class="bg-gray-900 rounded p-3 text-sm font-mono text-gray-400 break-all">
+                        src/Model-Training/LightGBM_v3/Model_LightGBM_v3.ipynb
+                    </div>
+                </div>
+
+                <div class="flex flex-col gap-4">
+                     <div id="box-mlflow" class="bg-slate-800 border border-blue-500/40 rounded-lg p-4 z-20 hover:border-blue-500/80 transition-colors flex items-center justify-between">
+                        <div>
+                            <div class="flex items-center gap-2 mb-1">
+                                <i data-lucide="box" class="w-4 h-4 text-blue-400"></i>
+                                <h3 class="font-medium text-blue-100 text-sm">MLflow Registry</h3>
+                            </div>
+                            <div class="text-xs font-mono text-gray-400">
+                                data/mlruns - "HomeCredit_Scorecard_Model"
+                            </div>
+                        </div>
+                        <div class="px-2 py-1 bg-blue-900/50 text-blue-300 text-xs rounded border border-blue-800">Tracking</div>
+                    </div>
+
+                     <div id="box-scoring" class="bg-gray-800/50 border border-gray-700 rounded-lg p-4 z-20 hover:border-gray-500 transition-colors">
+                        <div class="flex items-center gap-2 mb-2">
+                            <i data-lucide="bar-chart-3" class="w-4 h-4 text-gray-300"></i>
+                            <h3 class="font-medium text-gray-200 text-sm">Scoring & Calibration</h3>
+                        </div>
+                        <div class="bg-gray-900 rounded p-2 text-xs font-mono text-gray-400 break-all">
+                            src/Scoring/Credit_Scoring.ipynb (PDO, KS/PSI)
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- ==================== PROMOTION DIVIDER (Desktop: vertical, Mobile: horizontal) ==================== -->
+        <div class="flex xl:flex-col items-center justify-center py-4 xl:py-0 xl:px-4 gap-2 relative z-30">
+            <div class="h-[1px] w-full xl:w-[1px] xl:h-full bg-gradient-to-r xl:bg-gradient-to-b from-transparent via-gray-600 to-transparent flex-1"></div>
+            
+            <div id="box-promote" class="bg-gray-900 border border-green-500/50 px-4 py-2 rounded-full flex flex-col xl:flex-row items-center gap-2 shadow-[0_0_20px_rgba(34,197,94,0.15)] whitespace-nowrap">
+                <span class="text-sm font-semibold text-green-400 uppercase tracking-wider">Promote</span>
+                <i data-lucide="arrow-right" class="w-4 h-4 text-green-400 hidden xl:block"></i>
+                <i data-lucide="arrow-down" class="w-4 h-4 text-green-400 block xl:hidden"></i>
+                <span class="text-xs font-mono bg-gray-800 px-2 py-1 rounded text-gray-300 border border-gray-700">@prod</span>
+            </div>
+
+            <div class="h-[1px] w-full xl:w-[1px] xl:h-full bg-gradient-to-r xl:bg-gradient-to-b from-transparent via-gray-600 to-transparent flex-1"></div>
+        </div>
+
+        <!-- ==================== INFERENCE SIDE ==================== -->
+        <div class="flex-1 flex flex-col gap-6" id="inference-zone">
+             <div class="flex items-center gap-3 mb-2 border-b border-gray-700 pb-2 justify-end">
+                <h2 class="text-xl font-semibold tracking-wide text-gray-200">INFERENCE ENVIRONMENT</h2>
+                <i data-lucide="cpu" class="w-6 h-6 text-fuchsia-400"></i>
+            </div>
+
+            <!-- Top Row: Input & Assembly -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 relative">
+                 <div class="flex flex-col gap-4">
+                    <div id="box-inf-input" class="bg-gray-800/50 border border-gray-700 rounded-lg p-4 z-20 hover:border-gray-500 transition-colors">
+                        <div class="flex items-center gap-2 mb-2">
+                            <i data-lucide="files" class="w-4 h-4 text-gray-400"></i>
+                            <h3 class="font-medium text-gray-200 text-sm">Batch Input Files</h3>
+                        </div>
+                        <div class="bg-gray-900 rounded p-2 text-xs font-mono text-gray-400 break-all">
+                            data/Inference/BatchInput
+                        </div>
+                    </div>
+                    
+                    <div id="box-shared-hist" class="bg-gray-800/50 border border-gray-700 border-dashed rounded-lg p-4 z-20 opacity-80">
+                         <div class="flex items-center gap-2 mb-2">
+                            <i data-lucide="history" class="w-4 h-4 text-gray-500"></i>
+                            <h3 class="font-medium text-gray-400 text-sm">Shared History</h3>
+                        </div>
+                        <div class="bg-gray-900 rounded p-2 text-xs font-mono text-gray-500 break-all">
+                            data/Input
+                        </div>
+                    </div>
+                 </div>
+
+                 <div id="box-feature-assembly" class="bg-gray-800/50 border border-gray-700 rounded-lg p-5 z-20 hover:border-fuchsia-500/50 transition-colors h-full flex flex-col justify-center">
+                    <div class="flex items-center gap-2 mb-3">
+                        <i data-lucide="blocks" class="w-5 h-5 text-fuchsia-400"></i>
+                        <h3 class="font-medium text-fuchsia-100">Feature Assembly</h3>
+                    </div>
+                    <div class="bg-gray-900 rounded p-3 text-sm font-mono text-gray-400 break-all mb-2">
+                        src/Inference/features/*.py
+                    </div>
+                    <div class="text-xs font-mono text-center text-fuchsia-300 bg-fuchsia-900/20 py-1 rounded border border-fuchsia-900/50">
+                        assemble_features()
+                    </div>
+                </div>
+            </div>
+
+            <!-- Middle Row: Model Loading & Deployment -->
+             <div class="bg-[#1e293b] border border-gray-700 rounded-lg p-5 z-20 relative mt-4">
+                <div class="flex items-center gap-2 mb-4 border-b border-gray-700 pb-2">
+                    <i data-lucide="download-cloud" class="w-5 h-5 text-blue-400"></i>
+                    <h3 class="font-medium text-blue-100">Model Loading & Initialization</h3>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4" id="box-model-loading">
+                    <div class="bg-gray-900 rounded p-3 text-sm font-mono text-gray-400 break-all">
+                        <span class="text-blue-300 text-xs block mb-1">// Loads MLflow model</span>
+                        src/Inference/model.py
+                    </div>
+                    <div class="bg-gray-900 rounded p-3 text-sm font-mono text-gray-400 break-all">
+                        <span class="text-blue-300 text-xs block mb-1">// Scorecard logic</span>
+                        src/Inference/pdo_scorecard.py
+                    </div>
+                </div>
+            </div>
+
+            <!-- Bottom Row: Execution & Output -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6 relative mt-2">
+                <!-- Deployment Methods -->
+                <div class="flex flex-col gap-4">
+                    <div id="box-batch-scoring" class="bg-gray-800/50 border-l-4 border-l-amber-500 border border-gray-700 rounded-r-lg p-4 z-20 hover:bg-gray-800 transition-colors">
+                        <div class="flex items-center justify-between mb-2">
+                            <div class="flex items-center gap-2">
+                                <i data-lucide="timer" class="w-4 h-4 text-amber-400"></i>
+                                <h3 class="font-medium text-amber-100 text-sm">Batch Scoring</h3>
+                            </div>
+                            <span class="text-[10px] uppercase tracking-wider text-gray-500 bg-gray-900 px-2 py-0.5 rounded">CLI / Airflow</span>
+                        </div>
+                        <div class="bg-gray-900 rounded p-2 text-xs font-mono text-gray-400 break-all">
+                            score_model_input.py
+                        </div>
+                    </div>
+
+                    <div id="box-realtime-api" class="bg-gray-800/50 border-l-4 border-l-cyan-500 border border-gray-700 rounded-r-lg p-4 z-20 hover:bg-gray-800 transition-colors">
+                        <div class="flex items-center justify-between mb-2">
+                            <div class="flex items-center gap-2">
+                                <i data-lucide="zap" class="w-4 h-4 text-cyan-400"></i>
+                                <h3 class="font-medium text-cyan-100 text-sm">Real-time API</h3>
+                            </div>
+                            <span class="text-[10px] uppercase tracking-wider text-gray-500 bg-gray-900 px-2 py-0.5 rounded">FastAPI</span>
+                        </div>
+                        <div class="bg-gray-900 rounded p-2 text-xs font-mono text-gray-400 break-all">
+                            realtime_api.py
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Data Output -->
+                <div id="box-data-output" class="bg-gray-800/50 border border-gray-700 rounded-lg p-5 z-20 hover:border-emerald-500/50 transition-colors flex flex-col justify-center">
+                    <div class="flex items-center gap-2 mb-3">
+                        <i data-lucide="database-backup" class="w-5 h-5 text-emerald-400"></i>
+                        <h3 class="font-medium text-emerald-100">Batch Output</h3>
+                    </div>
+                    <div class="bg-gray-900 rounded p-3 text-sm font-mono text-gray-400 break-all shadow-inner">
+                        data/Inference/BatchOutput/&lt;date&gt;/<br/><span class="text-emerald-300 font-semibold">scored_applicants.parquet</span>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+    </div>
+
+    <script>
+        // Initialize Lucide icons
+        lucide.createIcons();
+
+        // Script to draw SVG lines between elements
+        document.addEventListener('DOMContentLoaded', () => {
+            const svg = document.getElementById('connections-svg');
+            
+            function getCenterCoords(elementId, offsetX = 0, offsetY = 0, edge = null) {
+                const el = document.getElementById(elementId);
+                if (!el) return null;
+                const rect = el.getBoundingClientRect();
+                const containerRect = svg.getBoundingClientRect();
+                
+                let x = (rect.left - containerRect.left) + rect.width / 2 + offsetX;
+                let y = (rect.top - containerRect.top) + rect.height / 2 + offsetY;
+
+                if (edge === 'bottom') y = (rect.bottom - containerRect.top) + offsetY;
+                if (edge === 'top') y = (rect.top - containerRect.top) + offsetY;
+                if (edge === 'right') x = (rect.right - containerRect.left) + offsetX;
+                if (edge === 'left') x = (rect.left - containerRect.left) + offsetX;
+
+                return { x, y };
+            }
+
+            function drawLine(id1, id2, color = '#475569', marker = 'arrowhead', edge1 = 'bottom', edge2 = 'top', pathType = 'curve', offset1 = {x:0, y:0}, offset2 = {x:0, y:0}) {
+                const p1 = getCenterCoords(id1, offset1.x, offset1.y, edge1);
+                const p2 = getCenterCoords(id2, offset2.x, offset2.y, edge2);
+                
+                if (!p1 || !p2) return;
+
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                
+                let d = '';
+                if (pathType === 'straight') {
+                    d = `M ${p1.x} ${p1.y} L ${p2.x} ${p2.y}`;
+                } else if (pathType === 'curve') {
+                    // Simple cubic bezier curve for smoother connections
+                    const deltaY = Math.abs(p2.y - p1.y);
+                    const controlOffset = Math.min(deltaY * 0.5, 100); 
+                    
+                    let cy1 = p1.y + (edge1 === 'bottom' ? controlOffset : (edge1 === 'top' ? -controlOffset : 0));
+                    let cx1 = p1.x + (edge1 === 'right' ? controlOffset : (edge1 === 'left' ? -controlOffset : 0));
+                    
+                    let cy2 = p2.y + (edge2 === 'top' ? -controlOffset : (edge2 === 'bottom' ? controlOffset : 0));
+                    let cx2 = p2.x + (edge2 === 'left' ? -controlOffset : (edge2 === 'right' ? controlOffset : 0));
+
+                    // Adjust for horizontal layouts if needed
+                    if(edge1 === 'right' && edge2 === 'left') {
+                        cy1 = p1.y; cx1 = p1.x + controlOffset;
+                        cy2 = p2.y; cx2 = p2.x - controlOffset;
+                    }
+
+                    d = `M ${p1.x} ${p1.y} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${p2.x} ${p2.y}`;
+                } else if (pathType === 'ortho') {
+                     // Orthogonal routing (simple step)
+                     const midY = p1.y + (p2.y - p1.y) / 2;
+                     d = `M ${p1.x} ${p1.y} L ${p1.x} ${midY} L ${p2.x} ${midY} L ${p2.x} ${p2.y}`;
+                } else if (pathType === 'ortho-x') {
+                     // Horizontal-first routing via the gutter between two grid
+                     // columns. Used for connections that jump across rows AND
+                     // columns (e.g. a box in row 3 of column A to a box in row 1
+                     // of column B) -- a vertical-first route (plain 'ortho') would
+                     // cut its horizontal leg through whatever occupies the rows in
+                     // between, in either column. Routing the vertical leg through
+                     // the empty gutter between columns instead avoids that.
+                     const midX = p1.x + (p2.x - p1.x) / 2;
+                     d = `M ${p1.x} ${p1.y} L ${midX} ${p1.y} L ${midX} ${p2.y} L ${p2.x} ${p2.y}`;
+                }
+
+                path.setAttribute('d', d);
+                path.setAttribute('stroke', color);
+                path.setAttribute('stroke-width', '1.5');
+                path.setAttribute('fill', 'none');
+                if(marker) {
+                    path.setAttribute('marker-end', `url(#${marker})`);
+                }
+
+                svg.appendChild(path);
+            }
+
+            function renderConnections() {
+                // Clear existing paths
+                svg.querySelectorAll('path').forEach(p => p.remove());
+
+                const isDesktop = window.innerWidth >= 1280;
+
+                // --- Training Side Connections ---
+                // Data Input and Preprocessing sit side-by-side (same row), and Data
+                // Input is much taller -- a bottom-to-top edge pair here computes a
+                // route that loops up past the top of the whole diagram before
+                // diving into Preprocessing. right-to-left matches how they actually
+                // sit next to each other.
+                drawLine('box-data-input', 'box-preprocess', '#3b82f6', 'arrowhead', 'right', 'left', 'curve');
+                drawLine('box-preprocess', 'box-staging', '#14b8a6', 'arrowhead-green', 'bottom', 'top', 'straight');
+                
+                // Staging out to multiple steps
+                drawLine('box-staging', 'box-var-select-1', '#6366f1', 'arrowhead-purple', 'bottom', 'top', 'ortho');
+                drawLine('box-var-select-1', 'box-mds', '#a855f7', 'arrowhead-purple', 'bottom', 'top', 'straight');
+                drawLine('box-mds', 'box-model-dataset', '#3b82f6', 'arrowhead', 'bottom', 'top', 'straight');
+                
+                // Model Dataset (column 1, row 3) feeds Multicollinearity Reduction
+                // (column 2, row 1) -- a plain vertical-first 'ortho' route cuts
+                // straight through MDS Creation and Hyperparameter Tuning, which sit
+                // in between. Routing via the gutter between columns (ortho-x) skips
+                // around them instead.
+                drawLine('box-model-dataset', 'box-var-select-2', '#3b82f6', 'arrowhead', 'right', 'left', 'ortho-x');
+                drawLine('box-var-select-2', 'box-tuning', '#f97316', 'arrowhead', 'bottom', 'top', 'straight');
+                
+                // Hyperparameter Tuning (column 2, row 2) feeds Model Training
+                // (its own row below) -- a vertical-first 'ortho' route cuts through
+                // Model Dataset, which sits in column 1 directly above Training.
+                // Route via the column gutter instead.
+                drawLine('box-tuning', 'box-training', '#10b981', 'arrowhead-green', 'left', 'right', 'ortho-x');
+
+                // Training and MLflow Registry start at the same row-top, and
+                // Training is much taller than MLflow -- like Data Input/Preprocessing
+                // above, a bottom-to-top route here dips into Scoring & Calibration
+                // (stacked below MLflow). right-to-left matches how they sit side by side.
+                drawLine('box-training', 'box-mlflow', '#3b82f6', 'arrowhead', 'right', 'left', 'curve');
+                drawLine('box-training', 'box-scoring', '#64748b', 'arrowhead', 'bottom', 'top', 'ortho');
+
+                // --- Promotion Connection ---
+                if (isDesktop) {
+                    // Connect MLFlow/Training to Promote button, then to Model Loading
+                    drawLine('box-mlflow', 'box-promote', '#22c55e', 'arrowhead-green', 'right', 'left', 'curve');
+                    drawLine('box-promote', 'box-model-loading', '#22c55e', 'arrowhead-green', 'right', 'left', 'curve');
+                } else {
+                    drawLine('box-mlflow', 'box-promote', '#22c55e', 'arrowhead-green', 'bottom', 'top', 'curve');
+                    drawLine('box-promote', 'box-model-loading', '#22c55e', 'arrowhead-green', 'bottom', 'top', 'curve');
+                }
+
+                // --- Inference Side Connections ---
+                drawLine('box-inf-input', 'box-feature-assembly', '#64748b', 'arrowhead', 'bottom', 'top', 'ortho');
+                drawLine('box-shared-hist', 'box-feature-assembly', '#64748b', 'arrowhead', 'bottom', 'top', 'ortho');
+                
+                // Features and Model merge into scoring methods
+                drawLine('box-feature-assembly', 'box-batch-scoring', '#d946ef', 'arrowhead-purple', 'bottom', 'left', 'curve');
+                drawLine('box-feature-assembly', 'box-realtime-api', '#d946ef', 'arrowhead-purple', 'bottom', 'left', 'curve', {x:0, y:0}, {x:0, y:10});
+                
+                drawLine('box-model-loading', 'box-batch-scoring', '#3b82f6', 'arrowhead', 'bottom', 'top', 'ortho');
+                // Realtime API is the second (lower) of two stacked boxes below
+                // Model Loading -- a plain top-edge 'ortho' route to it cuts through
+                // Batch Scoring, which sits directly above it in the same column.
+                // Enter from the right instead, via the gutter next to Batch Output.
+                drawLine('box-model-loading', 'box-realtime-api', '#3b82f6', 'arrowhead', 'bottom', 'right', 'ortho-x');
+
+                // Output
+                drawLine('box-batch-scoring', 'box-data-output', '#f59e0b', 'arrowhead', 'bottom', 'top', 'ortho');
+            }
+
+            // Render initially and on resize
+            setTimeout(renderConnections, 100); // slight delay to ensure rendering is complete
+            window.addEventListener('resize', renderConnections);
+
+            // ==================== GEMINI AI INTEGRATION ====================
+            const apiKey = ""; // API key is injected at runtime
+
+            async function fetchGeminiWithRetry(prompt, retries = 5) {
+                const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+                const payload = {
+                    contents: [{ parts: [{ text: prompt }] }],
+                    systemInstruction: { parts: [{ text: "You are an expert Machine Learning Systems Architect. Provide concise, highly professional, and insightful technical explanations. Use markdown formatting. Do not use overly enthusiastic language." }] }
+                };
+
+                const delays = [1000, 2000, 4000, 8000, 16000];
+                for (let i = 0; i < retries; i++) {
+                    try {
+                        const response = await fetch(url, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                        const data = await response.json();
+                        return data.candidates[0].content.parts[0].text;
+                    } catch (error) {
+                        if (i === retries - 1) throw error;
+                        await new Promise(res => setTimeout(res, delays[i]));
+                    }
+                }
+            }
+
+            const aiPanel = document.getElementById('ai-panel');
+            const aiToggle = document.getElementById('ai-toggle');
+            const aiClose = document.getElementById('ai-close');
+            const aiOutput = document.getElementById('ai-output');
+            const analyzeBtn = document.getElementById('analyze-btn');
+            const aiLoading = document.getElementById('ai-loading');
+
+            // Toggle AI Panel
+            aiToggle.addEventListener('click', () => {
+                aiPanel.classList.toggle('translate-x-full');
+            });
+            aiClose.addEventListener('click', () => {
+                aiPanel.classList.add('translate-x-full');
+            });
+
+            async function handleAILogic(prompt) {
+                aiPanel.classList.remove('translate-x-full'); // Open panel
+                aiOutput.innerHTML = '';
+                aiLoading.classList.remove('hidden');
+
+                try {
+                    const text = await fetchGeminiWithRetry(prompt);
+                    // Parse markdown and apply Tailwind styles to the elements
+                    aiOutput.innerHTML = marked.parse(text);
+                    aiOutput.querySelectorAll('h1, h2, h3').forEach(el => el.classList.add('text-blue-400', 'font-semibold', 'mt-5', 'mb-2', 'border-b', 'border-gray-800', 'pb-1'));
+                    aiOutput.querySelectorAll('p').forEach(el => el.classList.add('mb-4', 'text-gray-300', 'leading-relaxed'));
+                    aiOutput.querySelectorAll('ul').forEach(el => el.classList.add('list-disc', 'pl-5', 'mb-4', 'text-gray-300', 'space-y-1'));
+                    aiOutput.querySelectorAll('ol').forEach(el => el.classList.add('list-decimal', 'pl-5', 'mb-4', 'text-gray-300', 'space-y-1'));
+                    aiOutput.querySelectorAll('li > strong').forEach(el => el.classList.add('text-gray-200'));
+                    aiOutput.querySelectorAll('code').forEach(el => el.classList.add('bg-gray-800', 'px-1.5', 'py-0.5', 'rounded', 'text-blue-300', 'font-mono', 'text-xs'));
+                    aiOutput.querySelectorAll('pre').forEach(el => el.classList.add('bg-gray-900', 'p-3', 'rounded-lg', 'overflow-x-auto', 'mb-4', 'border', 'border-gray-700'));
+                } catch (error) {
+                    aiOutput.innerHTML = `<div class="text-red-400 p-4 bg-red-900/20 rounded border border-red-900/50">Error connecting to AI: ${error.message}</div>`;
+                } finally {
+                    aiLoading.classList.add('hidden');
+                }
+            }
+
+            // Make all architecture boxes interactive
+            const boxes = document.querySelectorAll('[id^="box-"]');
+            boxes.forEach(box => {
+                box.classList.add('cursor-pointer', 'relative', 'group', 'transition-all', 'hover:shadow-[0_0_15px_rgba(59,130,246,0.3)]', 'hover:-translate-y-0.5');
+                
+                // Inject sparkle label on hover
+                const sparkle = document.createElement('div');
+                sparkle.innerHTML = '✨ Ask AI';
+                sparkle.className = 'absolute top-2 right-2 bg-blue-600 text-[10px] px-2 py-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity shadow-lg z-50 text-white font-semibold pointer-events-none whitespace-nowrap tracking-wide';
+                box.appendChild(sparkle);
+
+                box.addEventListener('click', () => {
+                    const titleEl = box.querySelector('h3') || box.querySelector('span');
+                    const title = titleEl ? titleEl.innerText : box.id.replace('box-', '').replace(/-/g, ' ');
+                    const prompt = `Explain the purpose, role, and common best practices for the "${title}" component within an enterprise Machine Learning lifecycle architecture. Be concise (2-3 paragraphs max) and highly technical.`;
+                    handleAILogic(prompt);
+                });
+            });
+
+            // Analyze Full Architecture
+            analyzeBtn.addEventListener('click', () => {
+                const architectureSummary = `
+                Training Pipeline: Input CSV -> Preprocessing -> Staging (Parquet) -> Variable Selection (Scoring) & Multicollinearity Reduction (VIF) -> MDS Creation -> Hyperparameter Tuning (Hyperopt) -> LightGBM Training -> MLflow Registry -> Scoring & Calibration (PDO, KS/PSI).
+                Inference Pipeline: Batch Input + Shared History -> Feature Assembly -> Model Loading (MLFlow/PDO Scorecard) -> Batch Scoring (CLI/Airflow) & Real-time API (FastAPI) -> Parquet Output.
+                `;
+                const prompt = `As a Principal ML Architect, review this specific ML Architecture: ${architectureSummary}. \n\nProvide a structured critique focusing on: \n1) Strong Points of this design.\n2) Potential Bottlenecks.\n3) Missing Components (e.g., feature store, drift monitoring). \nKeep it actionable and concise.`;
+                handleAILogic(prompt);
+            });
+        });
+    </script>
+
+    <!-- AI Assistant UI -->
+    <button id="ai-toggle" class="fixed bottom-6 right-6 z-50 bg-blue-600 hover:bg-blue-500 text-white rounded-full p-4 shadow-[0_0_20px_rgba(37,99,235,0.4)] transition-all flex items-center justify-center group" title="Open AI Architect">
+        <i data-lucide="sparkles" class="w-6 h-6 group-hover:rotate-12 transition-transform"></i>
+    </button>
+
+    <div id="ai-panel" class="fixed top-0 right-0 h-full w-full sm:w-[400px] bg-[#0b0f19]/95 backdrop-blur-xl border-l border-gray-800 transform translate-x-full transition-transform duration-300 z-[60] flex flex-col shadow-2xl">
+        <div class="p-5 border-b border-gray-800 flex justify-between items-center bg-[#111827]">
+            <div class="flex items-center gap-2">
+                <i data-lucide="bot" class="w-5 h-5 text-blue-400"></i>
+                <h2 class="text-lg font-semibold text-gray-200 tracking-wide">AI Architect ✨</h2>
+            </div>
+            <button id="ai-close" class="text-gray-400 hover:text-white transition-colors p-1 bg-gray-800 rounded-md hover:bg-gray-700">
+                <i data-lucide="x" class="w-5 h-5"></i>
+            </button>
+        </div>
+        
+        <div class="p-4 border-b border-gray-800 bg-[#1e293b]/50">
+            <button id="analyze-btn" class="w-full bg-blue-600/90 hover:bg-blue-500 text-white font-medium py-3 px-4 rounded-lg flex items-center justify-center gap-2 transition-colors shadow-lg border border-blue-500/50">
+                <i data-lucide="scan-line" class="w-4 h-4"></i>
+                ✨ Analyze Full Architecture
+            </button>
+            <p class="text-[11px] text-gray-400 text-center mt-3 uppercase tracking-wider font-semibold">Or click any diagram component to ask about it.</p>
+        </div>
+
+        <div class="flex-1 overflow-y-auto p-6 relative">
+            <div id="ai-loading" class="hidden absolute inset-0 bg-[#0b0f19]/80 backdrop-blur-sm flex flex-col items-center justify-center z-10">
+                <i data-lucide="loader-2" class="w-8 h-8 text-blue-500 animate-spin mb-4"></i>
+                <span class="text-sm font-medium text-blue-400 animate-pulse tracking-wide">Analyzing Architecture...</span>
+            </div>
+            <div id="ai-output" class="text-sm">
+                <div class="flex flex-col items-center justify-center h-full text-center opacity-40 mt-24">
+                    <i data-lucide="network" class="w-16 h-16 mb-4 text-blue-500"></i>
+                    <p class="text-base text-gray-300 font-medium">I am your AI Systems Architect.</p>
+                    <p class="mt-2 text-xs text-gray-400">Run a full analysis or click a component to begin.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+</body>
+</html>

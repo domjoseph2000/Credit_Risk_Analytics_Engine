@@ -13,7 +13,6 @@
 #
 # Environment variables (all optional — defaults shown):
 #   HOMECREDIT_DATA_ROOT=/data          project root inside the container
-#   HOMECREDIT_NB_DIR=/app/notebooks    where patched notebooks are stored
 #   AIRFLOW_ADMIN_USER=admin
 #   AIRFLOW_ADMIN_PASSWORD=admin
 #   AIRFLOW_HOME=/opt/airflow
@@ -39,7 +38,7 @@ RUN pip install --no-cache-dir --upgrade pip
 # Data science stack
 RUN pip install --no-cache-dir \
         pandas==2.3.1 \
-        numpy==1.26.4 \
+        numpy==2.3.2 \
         scipy==1.16.1 \
         scikit-learn==1.7.1 \
         pyarrow==21.0.0 \
@@ -48,7 +47,8 @@ RUN pip install --no-cache-dir \
         matplotlib==3.10.5 \
         mlflow==3.12.0 \
         hyperopt==0.2.7 \
-        setuptools==78.1.1
+        setuptools==78.1.1 \
+        email-validator==2.3.0
 
 # Notebook execution
 RUN pip install --no-cache-dir \
@@ -85,14 +85,12 @@ ENV AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION=False
 # ── Pipeline environment variables ────────────────────────────────────────────
 ENV HOMECREDIT_DATA_ROOT=/data
 ENV HOMECREDIT_SRC_DIR=/src
-ENV HOMECREDIT_NB_DIR=/src/Preprocess/notebooks
 ENV AIRFLOW_ADMIN_USER=admin
 ENV AIRFLOW_ADMIN_PASSWORD=admin
 
 # ── Data volume ───────────────────────────────────────────────────────────────
 # Mount your project data here:
 #   docker run -v /your/local/data:/data ...
-# Expected layout under /data:
 
 VOLUME ["/data"]
 
