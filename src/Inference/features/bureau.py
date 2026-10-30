@@ -1,21 +1,20 @@
 """
-Aggregated features from bureau.csv (+ bureau_balance.csv), joined on
-SK_ID_CURR. Replace aggregation choices with your actual notebook logic;
-the shape (one row per SK_ID_CURR, prefixed columns) is what matters for
-compatibility with the rest of the pipeline.
+Aggregated features from bureau.csv, joined on SK_ID_CURR.
+
+Rebuilt for the LightGBM_v4 (@prod) feature set -- see
+data/Model-Training/ModelOutput/LightGBM_v4/lgbm_feature_importance.xlsx for
+the ground truth feature list, and src/Preprocess/Bureau_data.ipynb for the
+logic this mirrors. None of v4's 5 bureau features depend on
+bureau_balance.csv, so that table isn't read here at all.
 """
 import pandas as pd
 import numpy as np
 
-# Raw bureau.csv columns build_features() actually reads -- see
-# features/pipeline.py::RAW_COLUMN_REQUIREMENTS for how batch loaders use
-# this to avoid pulling in all 17 raw bureau columns for a 1.7M-row table.
+# Raw bureau.csv columns build_features() actually reads.
 REQUIRED_COLUMNS = [
     'SK_ID_CURR',
-    'SK_ID_BUREAU',
     'CREDIT_TYPE',
     'CREDIT_ACTIVE',
-    'AMT_CREDIT_SUM_LIMIT',
     'AMT_CREDIT_SUM_DEBT',
     'AMT_CREDIT_SUM',
     'DAYS_CREDIT_UPDATE',
@@ -31,81 +30,48 @@ def build_features(bureau_df: pd.DataFrame, valid_ids) -> pd.DataFrame:
     IDs that get dropped by the join in pipeline.py anyway.
     """
     df = bureau_df.loc[bureau_df['SK_ID_CURR'].isin(valid_ids), REQUIRED_COLUMNS].copy()
-    df = df.astype({'SK_ID_CURR': 'string', 'SK_ID_BUREAU': 'string'})
-    df.sort_values(by=['SK_ID_CURR', 'DAYS_CREDIT'], ascending=[True, False], inplace=True, ignore_index=True)
+    df = df.astype({'SK_ID_CURR': 'string'})
 
-    # 1. Impute missing values in AMT_CREDIT_SUM_LIMIT and AMT_CREDIT_SUM_DEBT based on CREDIT_ACTIVE and CREDIT_TYPE
-
-    # Closed credits: limit and debt are 0
+    # Impute AMT_CREDIT_SUM_DEBT nulls (Bureau_data.ipynb Section 3). Only
+    # the two branches that touch AMT_CREDIT_SUM_DEBT are needed here --
+    # the active-credit-card branch only ever imputes AMT_CREDIT_SUM_LIMIT,
+    # which none of v4's features read.
     closed = df['CREDIT_ACTIVE'] == 'Closed'
-    df.loc[closed & df['AMT_CREDIT_SUM_LIMIT'].isna(), 'AMT_CREDIT_SUM_LIMIT'] = 0
-    df.loc[closed & df['AMT_CREDIT_SUM_DEBT'].isna(),  'AMT_CREDIT_SUM_DEBT']  = 0
+    df.loc[closed & df['AMT_CREDIT_SUM_DEBT'].isna(), 'AMT_CREDIT_SUM_DEBT'] = 0
 
-    # Active non-card: limit = 0, debt = full credit sum
-    active_noncredit = (df['CREDIT_ACTIVE'] == 'Active') & (df['CREDIT_TYPE'] != 'Credit card')
-    df.loc[active_noncredit & df['AMT_CREDIT_SUM_LIMIT'].isna(), 'AMT_CREDIT_SUM_LIMIT'] = 0
-    df.loc[active_noncredit & df['AMT_CREDIT_SUM_DEBT'].isna(),  'AMT_CREDIT_SUM_DEBT']  = (
-        df.loc[active_noncredit & df['AMT_CREDIT_SUM_DEBT'].isna(), 'AMT_CREDIT_SUM']
+    active_noncard = (df['CREDIT_ACTIVE'] == 'Active') & (df['CREDIT_TYPE'] != 'Credit card')
+    df.loc[active_noncard & df['AMT_CREDIT_SUM_DEBT'].isna(), 'AMT_CREDIT_SUM_DEBT'] = (
+        df.loc[active_noncard & df['AMT_CREDIT_SUM_DEBT'].isna(), 'AMT_CREDIT_SUM']
     )
-
-    # Active credit cards: limit = max(credit_sum - debt, 0)
-    active_card = (df['CREDIT_ACTIVE'] == 'Active') & (df['CREDIT_TYPE'] == 'Credit card')
-    card_limit_null = active_card & df['AMT_CREDIT_SUM_LIMIT'].isna()
-    df.loc[card_limit_null, 'AMT_CREDIT_SUM_LIMIT'] = np.where(
-        df.loc[card_limit_null, 'AMT_CREDIT_SUM'] > df.loc[card_limit_null, 'AMT_CREDIT_SUM_DEBT'],
-        df.loc[card_limit_null, 'AMT_CREDIT_SUM'] - df.loc[card_limit_null, 'AMT_CREDIT_SUM_DEBT'],
-        0,
-    )
-
-    print("Credit-sum imputation complete.")
-    print("Remaining nulls in imputed columns:")
-    print(df[['AMT_CREDIT_SUM_LIMIT', 'AMT_CREDIT_SUM_DEBT']].isna().sum().to_string())
-
-    # 2. Create derived features; BUREAUCREDIT_AMT_CREDIT_SUM_DEBT_MEAN, BUREAUCREDIT_UTILIZATION_RATIO_MEAN, BUREAUCREDIT_DAYS_CREDIT_UPDATE_MEAN
 
     df['UTILIZATION_RATIO'] = np.where(
         df['AMT_CREDIT_SUM'] > 0,
         df['AMT_CREDIT_SUM_DEBT'] / df['AMT_CREDIT_SUM'],
         np.nan,
     )
-    print("Derived UTILIZATION_RATIO.")
-    print("Aggregating features by SK_ID_CURR...")
 
-    features_to_aggregate = [
-        'AMT_CREDIT_SUM_DEBT',
-        'UTILIZATION_RATIO',
-        'DAYS_CREDIT_UPDATE'
-    ]
-    df_agg_numeric = (
-        df.groupby('SK_ID_CURR')[features_to_aggregate]
-        .agg(['mean'])
+    # All-credit aggregates
+    df_agg_all = (
+        df.groupby('SK_ID_CURR').agg(
+            AMT_CREDIT_SUM_DEBT_MEAN=('AMT_CREDIT_SUM_DEBT', 'mean'),
+            DAYS_CREDIT_UPDATE_MEAN=('DAYS_CREDIT_UPDATE', 'mean'),
+            DAYS_TO_LAST_CREDIT=('DAYS_CREDIT', 'max'),
+            AVG_DAYS_BETWEEN_CREDITS=('DAYS_CREDIT', lambda x: x.sort_values(ascending=True).diff().mean()),
+        )
         .reset_index()
     )
 
-    columns = [ col[0] if not col[1]  else '_'.join(col).upper()
-        for col in df_agg_numeric.columns
-    ]
-    df_agg_numeric.columns = columns
-
-    print("Aggregating count-based features...")
-    # 3. Create count-based features; TOTAL_ACTIVE_CREDIT_COUNT, DAYS_TO_LAST_CREDIT, AVG_DAYS_BETWEEN_CREDITS
-    df_agg_counts = (
-        df.groupby('SK_ID_CURR').agg(
-            TOTAL_ACTIVE_CREDIT_COUNT=('CREDIT_ACTIVE', lambda x: (x == 'Active').sum()),
-            DAYS_TO_LAST_CREDIT=('DAYS_CREDIT', 'max'),
-            AVG_DAYS_BETWEEN_CREDITS=('DAYS_CREDIT', lambda x: x.sort_values(ascending=True).diff().mean())
-        )
-        .reset_index()  
+    # Active-credit-only aggregate (Bureau_data.ipynb Section 8c)
+    df_agg_active = (
+        df[df['CREDIT_ACTIVE'] == 'Active']
+        .groupby('SK_ID_CURR')
+        .agg(ACTIVE_ACCOUNT_UTILIZATION_RATIO_MAX=('UTILIZATION_RATIO', 'max'))
+        .reset_index()
     )
 
-    # 4. Merge numeric and count-based features
-    df_agg_final = df_agg_numeric.merge(df_agg_counts, on='SK_ID_CURR', how='left')
+    df_agg_final = df_agg_all.merge(df_agg_active, on='SK_ID_CURR', how='left')
     df_agg_final.columns = [
         col if col == 'SK_ID_CURR' else f'BUREAUCREDIT_{col}'
         for col in df_agg_final.columns
     ]
-
-    print("Final aggregated features:")
-    print(df_agg_final.shape[0], "applicants with aggregated bureau features.")
-
     return df_agg_final

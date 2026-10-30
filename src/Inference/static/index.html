@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Home Credit — Real-Time Scoring</title>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --panel: #ffffff;
+    --border: #dde1e6;
+    --text: #1f2530;
+    --muted: #67707d;
+    --accent: #2f6fed;
+    --green: #1a8f4c;
+    --red: #d1403f;
+    --amber: #b8860b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  header {
+    padding: 20px 28px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  header h1 { margin: 0 0 4px; font-size: 20px; }
+  header p { margin: 0; color: var(--muted); font-size: 13px; }
+  .layout {
+    display: grid;
+    grid-template-columns: minmax(340px, 480px) 1fr;
+    gap: 20px;
+    padding: 20px 28px 40px;
+    align-items: start;
+  }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+  }
+  .card h2 { font-size: 14px; margin: 0 0 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .field { margin-bottom: 12px; }
+  .field label { display: block; font-size: 12.5px; margin-bottom: 4px; color: var(--text); }
+  .field .hint { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  input, select {
+    width: 100%;
+    padding: 7px 9px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 13px;
+    background: #fff;
+    color: var(--text);
+  }
+  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .checkbox-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+  .checkbox-row input { width: auto; }
+  .examples { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  button {
+    cursor: pointer;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: #fff;
+    padding: 7px 12px;
+    font-size: 12.5px;
+    color: var(--text);
+  }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    width: 100%;
+    padding: 11px;
+    font-size: 14px;
+    font-weight: 600;
+    margin-top: 6px;
+  }
+  button.primary:hover { opacity: .92; color: #fff; }
+  button.primary:disabled { opacity: .5; cursor: default; }
+  details summary { cursor: pointer; font-size: 12.5px; color: var(--muted); margin: 6px 0 12px; }
+  #error {
+    display: none;
+    background: #fdecea;
+    border: 1px solid #f4c2c0;
+    color: var(--red);
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    margin-bottom: 16px;
+    white-space: pre-wrap;
+  }
+  #placeholder { color: var(--muted); font-size: 13px; }
+  .gauge-wrap { display: flex; flex-direction: column; align-items: center; margin-bottom: 4px; }
+  .gauge-scale { display: flex; justify-content: space-between; width: 190px; margin-top: -10px; font-size: 11px; color: var(--muted); }
+  .result-top { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; margin-bottom: 22px; }
+  .score-badge {
+    font-size: 40px;
+    font-weight: 700;
+    line-height: 1;
+  }
+  .band-pill {
+    display: inline-block;
+    padding: 5px 12px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #fff;
+  }
+  .stat { font-size: 13px; color: var(--muted); }
+  .stat b { color: var(--text); font-size: 15px; }
+  .bar-row { display: grid; grid-template-columns: 230px 1fr 60px; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .bar-label { font-size: 12px; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar-track { position: relative; height: 16px; background: #eef0f3; border-radius: 4px; overflow: hidden; }
+  .bar-fill { position: absolute; top: 0; bottom: 0; }
+  .bar-value { font-size: 12px; color: var(--muted); }
+  .legend { font-size: 11.5px; color: var(--muted); margin-top: 10px; }
+  .id-note {
+    font-size: 12px;
+    color: var(--muted);
+    background: #f0f4ff;
+    border: 1px solid #dce6ff;
+    border-radius: 8px;
+    padding: 8px 10px;
+    margin-top: 10px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Home Credit — Real-Time Default Scoring</h1>
+  <p>Calls <code>POST /score</code> on this same API. Fields below are exactly what <code>features/application.py</code> consumes — see the collapsed section for extra fields the API accepts but doesn't score on yet.</p>
+</header>
+
+<div class="layout">
+
+  <form class="card" id="form">
+    <h2>Applicant</h2>
+
+    <div class="examples">
+      <button type="button" id="fillExisting">Load example: existing applicant (100002)</button>
+      <button type="button" id="fillNew">Load example: brand-new applicant (no history)</button>
+    </div>
+
+    <div class="field">
+      <label for="SK_ID_CURR">SK_ID_CURR</label>
+      <input type="number" id="SK_ID_CURR" required value="100002">
+      <div class="hint">An ID that already appears in bureau/previous-loan/POS/installments/credit-card history gets those features filled in; any other ID scores as a brand-new applicant with no history (all-NaN, handled natively by the model).</div>
+    </div>
+
+    <div class="row2">
+      <div class="field">
+        <label for="AGE_YEARS">Age (years)</label>
+        <input type="number" id="AGE_YEARS" step="any" min="18" max="100" required value="25.9">
+      </div>
+      <div class="field">
+        <label for="EMPLOYED_YEARS">Years employed</label>
+        <input type="number" id="EMPLOYED_YEARS" step="any" min="0" value="1.7">
+        <div class="checkbox-row">
+          <input type="checkbox" id="NOT_EMPLOYED">
+          <label for="NOT_EMPLOYED" style="margin:0;">Not currently employed / retired</label>
+        </div>
+      </div>
+    </div>
+
+    <div class="row2">
+      <div class="field">
+        <label for="AMT_CREDIT">Loan amount requested (AMT_CREDIT)</label>
+        <input type="number" id="AMT_CREDIT" step="any" required value="406597.5">
+      </div>
+      <div class="field">
+        <label for="AMT_GOODS_PRICE">Goods price (AMT_GOODS_PRICE)</label>
+        <input type="number" id="AMT_GOODS_PRICE" step="any" value="351000">
+      </div>
+    </div>
+
+    <div class="row2">
+      <div class="field">
+        <label for="ID_PUBLISH_DATE">ID document issue date</label>
+        <input type="date" id="ID_PUBLISH_DATE">
+        <div class="hint">DAYS_ID_PUBLISH is computed as today minus this date.</div>
+      </div>
+      <div class="field">
+        <label for="OWN_CAR_AGE">Car age, years (blank = no car)</label>
+        <input type="number" id="OWN_CAR_AGE" step="any" min="0">
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="FLOORSMAX_MEDI">Building floors-max, normalized (0–1)</label>
+      <input type="number" id="FLOORSMAX_MEDI" step="any" min="0" max="1" value="0.0833">
+    </div>
+
+    <div class="row2">
+      <div class="field">
+        <label for="OCCUPATION_TYPE">Occupation type</label>
+        <select id="OCCUPATION_TYPE"></select>
+      </div>
+      <div class="field">
+        <label for="ORGANIZATION_TYPE">Organization type</label>
+        <select id="ORGANIZATION_TYPE"></select>
+      </div>
+    </div>
+
+    <div class="row2">
+      <div class="field">
+        <label for="EXT_SOURCE_1">EXT_SOURCE_1 (0–1)</label>
+        <input type="number" id="EXT_SOURCE_1" step="any" min="0" max="1" value="0.08">
+      </div>
+      <div class="field">
+        <label for="EXT_SOURCE_2">EXT_SOURCE_2 (0–1)</label>
+        <input type="number" id="EXT_SOURCE_2" step="any" min="0" max="1" value="0.26">
+      </div>
+    </div>
+    <div class="field">
+      <label for="EXT_SOURCE_3">EXT_SOURCE_3 (0–1)</label>
+      <input type="number" id="EXT_SOURCE_3" step="any" min="0" max="1" value="0.14">
+    </div>
+    <div class="hint" style="margin-bottom:14px;">EXT_SOURCE_1/2/3 are normalized external credit-bureau scores — leave blank if unknown, but together they're ~14% of the model's total signal.</div>
+
+    <details>
+      <summary>Extra fields accepted by the API (not yet used in scoring)</summary>
+      <div class="row2">
+        <div class="field">
+          <label for="AMT_INCOME_TOTAL">Annual income (AMT_INCOME_TOTAL)</label>
+          <input type="number" id="AMT_INCOME_TOTAL" step="any" required value="202500">
+        </div>
+        <div class="field">
+          <label for="AMT_ANNUITY">Loan annuity (AMT_ANNUITY)</label>
+          <input type="number" id="AMT_ANNUITY" step="any" value="24700.5">
+        </div>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label for="CODE_GENDER">Gender</label>
+          <select id="CODE_GENDER">
+            <option value="">—</option>
+            <option>M</option>
+            <option>F</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="NAME_CONTRACT_TYPE">Contract type</label>
+          <select id="NAME_CONTRACT_TYPE">
+            <option value="">—</option>
+            <option>Cash loans</option>
+            <option>Revolving loans</option>
+          </select>
+        </div>
+      </div>
+    </details>
+
+    <button type="submit" class="primary" id="submitBtn">Score applicant</button>
+  </form>
+
+  <div class="card">
+    <h2>Result</h2>
+    <div id="error"></div>
+    <div id="placeholder">Submit the form to see the credit score, risk band, and top SHAP-based reason codes.</div>
+    <div id="results" style="display:none;">
+
+      <div class="gauge-wrap">
+        <svg viewBox="0 0 220 130" width="220" height="130">
+          <g id="gaugeBands"></g>
+          <line id="gaugeNeedle" x1="110" y1="110" x2="110" y2="34" stroke="var(--text)" stroke-width="3" stroke-linecap="round"></line>
+          <circle cx="110" cy="110" r="6" fill="var(--text)"></circle>
+        </svg>
+        <div class="gauge-scale"><span>300</span><span>850</span></div>
+      </div>
+
+      <div class="result-top">
+        <div>
+          <div class="stat">Credit score</div>
+          <div class="score-badge" id="scoreValue">—</div>
+        </div>
+        <span class="band-pill" id="bandPill">—</span>
+        <div class="stat">Probability of default<br><b id="pdValue">—</b></div>
+      </div>
+
+      <h2 style="margin-top:0;">Top reason codes</h2>
+      <div id="bars"></div>
+      <div class="legend">
+        <span style="color:var(--green);">■</span> positive points push the score up (lower risk) &nbsp;
+        <span style="color:var(--red);">■</span> negative points push the score down (higher risk)
+      </div>
+      <div class="id-note" id="idNote"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+const OCCUPATIONS = ["Accountants","Cleaning staff","Cooking staff","Core staff","Drivers","HR staff","High skill tech staff","IT staff","Laborers","Low-skill Laborers","Managers","Medicine staff","Private service staff","Realty agents","Sales staff","Secretaries","Security staff","Waiters/barmen staff"];
+const ORGANIZATIONS = ["Advertising","Agriculture","Bank","Business Entity Type 1","Business Entity Type 2","Business Entity Type 3","Cleaning","Construction","Culture","Electricity","Emergency","Government","Hotel","Housing","Industry: type 1","Industry: type 10","Industry: type 11","Industry: type 12","Industry: type 13","Industry: type 2","Industry: type 3","Industry: type 4","Industry: type 5","Industry: type 6","Industry: type 7","Industry: type 8","Industry: type 9","Insurance","Kindergarten","Legal Services","Medicine","Military","Mobile","Other","Police","Postal","Realtor","Religion","Restaurant","School","Security","Security Ministries","Self-employed","Services","Telecom","Trade: type 1","Trade: type 2","Trade: type 3","Trade: type 4","Trade: type 5","Trade: type 6","Trade: type 7","Transport: type 1","Transport: type 2","Transport: type 3","Transport: type 4","University","XNA"];
+
+function fillSelect(id, values, selected) {
+  const el = document.getElementById(id);
+  el.innerHTML = '<option value="">—</option>' + values.map(v =>
+    `<option value="${v}" ${v === selected ? 'selected' : ''}>${v}</option>`).join('');
+}
+fillSelect('OCCUPATION_TYPE', OCCUPATIONS, 'Laborers');
+fillSelect('ORGANIZATION_TYPE', ORGANIZATIONS, 'Business Entity Type 3');
+
+const BAND_COLORS = {
+  'A': '#1a8f4c', 'B': '#5fae3c', 'C': '#b8860b', 'D': '#d97a25', 'E': '#d1403f'
+};
+
+function bandColor(band) {
+  const letter = (band || '').trim().charAt(0);
+  return BAND_COLORS[letter] || '#67707d';
+}
+
+function daysAgoToDateString(days) {
+  const d = new Date(Date.now() - days * 86400000);
+  return d.toISOString().slice(0, 10);
+}
+
+// --- Risk gauge: a speedometer-style dial over config.py's score range
+// (300-850) and risk-band cutoffs (BAND_BINS), red (E) on the left through
+// green (A) on the right, with a needle pointing at the returned score.
+const GAUGE_MIN = 300, GAUGE_MAX = 850;
+const GAUGE_BANDS = [
+  { from: 300, to: 560, color: BAND_COLORS.E },
+  { from: 560, to: 590, color: BAND_COLORS.D },
+  { from: 590, to: 620, color: BAND_COLORS.C },
+  { from: 620, to: 650, color: BAND_COLORS.B },
+  { from: 650, to: 850, color: BAND_COLORS.A },
+];
+const GAUGE_CX = 110, GAUGE_CY = 110, GAUGE_R = 90;
+
+function gaugeAngle(score) {
+  const frac = Math.min(1, Math.max(0, (score - GAUGE_MIN) / (GAUGE_MAX - GAUGE_MIN)));
+  return -90 + frac * 180; // -90 = pointing left (min/high risk), +90 = pointing right (max/low risk)
+}
+function gaugePoint(r, angleDeg) {
+  const rad = angleDeg * Math.PI / 180;
+  return { x: GAUGE_CX + r * Math.sin(rad), y: GAUGE_CY - r * Math.cos(rad) };
+}
+function gaugeArcPath(r, a0, a1) {
+  const p0 = gaugePoint(r, a0), p1 = gaugePoint(r, a1);
+  const largeArc = Math.abs(a1 - a0) > 180 ? 1 : 0;
+  return `M ${p0.x.toFixed(2)} ${p0.y.toFixed(2)} A ${r} ${r} 0 ${largeArc} 1 ${p1.x.toFixed(2)} ${p1.y.toFixed(2)}`;
+}
+
+(function buildGauge() {
+  const g = document.getElementById('gaugeBands');
+  g.innerHTML = GAUGE_BANDS.map(b => {
+    const d = gaugeArcPath(GAUGE_R, gaugeAngle(b.from), gaugeAngle(b.to));
+    return `<path d="${d}" fill="none" stroke="${b.color}" stroke-width="18"></path>`;
+  }).join('');
+})();
+
+function updateGaugeNeedle(score) {
+  const rotation = gaugeAngle(score); // svg rotate() is clockwise, matching our angle convention
+  document.getElementById('gaugeNeedle').setAttribute('transform', `rotate(${rotation} ${GAUGE_CX} ${GAUGE_CY})`);
+}
+
+document.getElementById('fillExisting').addEventListener('click', () => {
+  document.getElementById('SK_ID_CURR').value = 100002;
+  document.getElementById('AGE_YEARS').value = 25.9;
+  document.getElementById('EMPLOYED_YEARS').value = 1.7;
+  document.getElementById('NOT_EMPLOYED').checked = false;
+  document.getElementById('AMT_CREDIT').value = 406597.5;
+  document.getElementById('AMT_GOODS_PRICE').value = 351000;
+  document.getElementById('ID_PUBLISH_DATE').value = daysAgoToDateString(2120);
+  document.getElementById('OWN_CAR_AGE').value = '';
+  document.getElementById('FLOORSMAX_MEDI').value = 0.0833;
+  document.getElementById('EXT_SOURCE_1').value = 0.083;
+  document.getElementById('EXT_SOURCE_2').value = 0.263;
+  document.getElementById('EXT_SOURCE_3').value = 0.139;
+  fillSelect('OCCUPATION_TYPE', OCCUPATIONS, 'Laborers');
+  fillSelect('ORGANIZATION_TYPE', ORGANIZATIONS, 'Business Entity Type 3');
+  document.getElementById('AMT_INCOME_TOTAL').value = 202500;
+  document.getElementById('AMT_ANNUITY').value = 24700.5;
+});
+
+document.getElementById('fillNew').addEventListener('click', () => {
+  document.getElementById('SK_ID_CURR').value = 999999999;
+  // Same demographic values as the example above -- only SK_ID_CURR changes,
+  // so the only difference in the response is that all 13 history-derived
+  // features come back NaN for this ID (it has no rows in bureau/previous
+  // loans/POS/installments/credit-card), demonstrating the "thin file" path.
+  document.getElementById('AGE_YEARS').value = 25.9;
+  document.getElementById('EMPLOYED_YEARS').value = 1.7;
+  document.getElementById('NOT_EMPLOYED').checked = false;
+  document.getElementById('AMT_CREDIT').value = 406597.5;
+  document.getElementById('AMT_GOODS_PRICE').value = 351000;
+  document.getElementById('ID_PUBLISH_DATE').value = daysAgoToDateString(2120);
+  document.getElementById('OWN_CAR_AGE').value = '';
+  document.getElementById('FLOORSMAX_MEDI').value = 0.0833;
+  document.getElementById('EXT_SOURCE_1').value = 0.083;
+  document.getElementById('EXT_SOURCE_2').value = 0.263;
+  document.getElementById('EXT_SOURCE_3').value = 0.139;
+  fillSelect('OCCUPATION_TYPE', OCCUPATIONS, 'Laborers');
+  fillSelect('ORGANIZATION_TYPE', ORGANIZATIONS, 'Business Entity Type 3');
+  document.getElementById('AMT_INCOME_TOTAL').value = 202500;
+  document.getElementById('AMT_ANNUITY').value = 24700.5;
+});
+
+function numOrNull(id) {
+  const v = document.getElementById(id).value;
+  return v === '' ? null : Number(v);
+}
+function strOrNull(id) {
+  const v = document.getElementById(id).value;
+  return v === '' ? null : v;
+}
+
+document.getElementById('form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errorEl = document.getElementById('error');
+  const submitBtn = document.getElementById('submitBtn');
+  errorEl.style.display = 'none';
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'Scoring…';
+
+  const ageYears = Number(document.getElementById('AGE_YEARS').value);
+  const employedYears = Number(document.getElementById('EMPLOYED_YEARS').value || 0);
+  const notEmployed = document.getElementById('NOT_EMPLOYED').checked;
+
+  const idPublishDate = document.getElementById('ID_PUBLISH_DATE').value;
+  const daysIdPublish = idPublishDate
+    ? -Math.round((Date.now() - new Date(idPublishDate + 'T00:00:00')) / 86400000)
+    : null;
+
+  const payload = {
+    SK_ID_CURR: Number(document.getElementById('SK_ID_CURR').value),
+    DAYS_BIRTH: -Math.round(ageYears * 365),
+    DAYS_EMPLOYED: notEmployed ? 365243 : -Math.round(employedYears * 365),
+    DAYS_ID_PUBLISH: daysIdPublish,
+    AMT_CREDIT: numOrNull('AMT_CREDIT'),
+    AMT_GOODS_PRICE: numOrNull('AMT_GOODS_PRICE'),
+    OWN_CAR_AGE: numOrNull('OWN_CAR_AGE'),
+    FLOORSMAX_MEDI: numOrNull('FLOORSMAX_MEDI'),
+    EXT_SOURCE_1: numOrNull('EXT_SOURCE_1'),
+    EXT_SOURCE_2: numOrNull('EXT_SOURCE_2'),
+    EXT_SOURCE_3: numOrNull('EXT_SOURCE_3'),
+    OCCUPATION_TYPE: strOrNull('OCCUPATION_TYPE'),
+    ORGANIZATION_TYPE: strOrNull('ORGANIZATION_TYPE'),
+    AMT_INCOME_TOTAL: numOrNull('AMT_INCOME_TOTAL'),
+    AMT_ANNUITY: numOrNull('AMT_ANNUITY'),
+    CODE_GENDER: strOrNull('CODE_GENDER'),
+    NAME_CONTRACT_TYPE: strOrNull('NAME_CONTRACT_TYPE'),
+  };
+
+  try {
+    const res = await fetch('/score', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const body = await res.json();
+    if (!res.ok) {
+      throw new Error(typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail, null, 2));
+    }
+    renderResult(body);
+  } catch (err) {
+    errorEl.textContent = 'Request failed: ' + err.message;
+    errorEl.style.display = 'block';
+    document.getElementById('results').style.display = 'none';
+    document.getElementById('placeholder').style.display = 'block';
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'Score applicant';
+  }
+});
+
+function renderResult(body) {
+  document.getElementById('placeholder').style.display = 'none';
+  document.getElementById('results').style.display = 'block';
+
+  document.getElementById('scoreValue').textContent = body.CREDIT_SCORE;
+  updateGaugeNeedle(body.CREDIT_SCORE);
+  const pill = document.getElementById('bandPill');
+  pill.textContent = body.RISK_BAND;
+  pill.style.background = bandColor(body.RISK_BAND);
+  document.getElementById('pdValue').textContent = (body.PROBA_DEFAULT * 100).toFixed(2) + '%';
+
+  const codes = body.REASON_CODES || [];
+  const maxAbs = Math.max(1, ...codes.map(c => Math.abs(c.points)));
+  const bars = document.getElementById('bars');
+  bars.innerHTML = codes.map(c => {
+    const pct = (Math.abs(c.points) / maxAbs) * 100;
+    const color = c.points >= 0 ? 'var(--green)' : 'var(--red)';
+    const side = c.points >= 0 ? 'left:50%;' : `right:50%;`;
+    return `
+      <div class="bar-row">
+        <div class="bar-label" title="${c.feature}">${c.feature}</div>
+        <div class="bar-track">
+          <div class="bar-fill" style="${side} width:${pct / 2}%; background:${color};"></div>
+        </div>
+        <div class="bar-value">${c.points >= 0 ? '+' : ''}${c.points.toFixed(1)}</div>
+      </div>`;
+  }).join('');
+
+  // HAS_CREDIT_HISTORY comes from the server (did this SK_ID_CURR match any
+  // row in bureau/previous-loan/POS/installments/credit-card?), not from
+  // guessing at REASON_CODES -- a NaN history feature can still show up as
+  // a top contributor (the model's learned default-split behavior for
+  // missing values), so its mere presence there doesn't mean real history.
+  document.getElementById('idNote').textContent = body.HAS_CREDIT_HISTORY
+    ? 'This applicant has Home Credit history on file -- history-derived features (bureau/POS/installments/credit-card/previous-loan) reflect real values above.'
+    : 'This SK_ID_CURR has no rows in bureau, previous-loan, POS, installments, or credit-card data -- a thin-file / brand-new applicant. All 13 history-derived features are NaN; any of them still appearing above reflects the model\'s learned default path for missing values, not a real value for this applicant.';
+}
+</script>
+
+</body>
+</html>

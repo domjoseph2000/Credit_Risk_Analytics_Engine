@@ -16,6 +16,12 @@
 #   AIRFLOW_ADMIN_USER=admin
 #   AIRFLOW_ADMIN_PASSWORD=admin
 #   AIRFLOW_HOME=/opt/airflow
+#   KAGGLE_COMPETITION=home-credit-default-risk
+#   KAGGLE_USERNAME / KAGGLE_KEY         Kaggle API credentials (or mount a
+#                                        kaggle.json into ~/.kaggle/) -- used
+#                                        by entrypoint.sh to download the raw
+#                                        input CSVs into DATA_ROOT/Input on
+#                                        first run, if they're not there yet
 # ─────────────────────────────────────────────────────────────────────────────
 
 FROM python:3.12-slim
@@ -25,6 +31,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         git \
         curl \
+        unzip \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Python dependencies ───────────────────────────────────────────────────────
@@ -35,26 +42,21 @@ ENV CONSTRAINT_URL="https://raw.githubusercontent.com/apache/airflow/constraints
 
 RUN pip install --no-cache-dir --upgrade pip
 
-# Data science stack
-RUN pip install --no-cache-dir \
-        pandas==2.3.1 \
-        numpy==2.3.2 \
-        scipy==1.16.1 \
-        scikit-learn==1.7.1 \
-        pyarrow==21.0.0 \
-        openpyxl==3.1.5 \
-        lightgbm==4.6.0 \
-        matplotlib==3.10.5 \
-        mlflow==3.12.0 \
-        hyperopt==0.2.7 \
-        setuptools==78.1.1 \
-        email-validator==2.3.0
+# Data science stack -- the same requirements.txt used for local runs, so
+# models trained here and on a laptop use identical library versions.
+# None of these are Airflow dependencies, so the Airflow constraints file
+# installed below leaves them untouched.
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt setuptools==78.1.1
 
-# Notebook execution
+# Notebook execution (ipykernel comes from requirements.txt)
 RUN pip install --no-cache-dir \
         papermill==2.6.0 \
-        ipykernel==6.29.4 \
         jupyter-client==8.6.2
+
+# Kaggle CLI -- entrypoint.sh uses this to fetch the raw competition CSVs
+# into HOMECREDIT_DATA_ROOT/Input on first run.
+RUN pip install --no-cache-dir kaggle==1.6.17
 
 # Airflow (standalone = scheduler + webserver + triggerer in one process)
 RUN pip install --no-cache-dir \

@@ -1,0 +1,41 @@
+# Python packages for training and loading the models: the notebooks and the
+# MLflow server -- Python 3.12.
+#
+#   python -m venv .venv          (or: conda create -n homecredit python=3.12)
+#   pip install -r requirements.txt
+#
+# The Docker image installs this same file (see Dockerfile), so local and
+# Airflow runs train and load models with identical libraries -- a model
+# pickled with one numpy / lightgbm / scikit-learn version may not load under
+# another. Change versions here only.
+#
+# Not listed here:
+# - Inference API packages (fastapi, uvicorn, pydantic) and pytest: see
+#   src/Inference/requirements.txt. Airflow requires its own, newer versions
+#   of fastapi/uvicorn/pydantic inside Docker, so pinning them here would
+#   conflict with the Airflow install.
+# - Airflow, papermill, kaggle: Docker-only (installed by the Dockerfile).
+
+# Data handling
+pandas==2.3.1
+numpy==2.3.2
+scipy==1.16.1
+pyarrow==21.0.0          # parquet files
+openpyxl==3.1.5          # Excel feature lists / reports
+
+# Modelling
+scikit-learn==1.7.1
+lightgbm==4.6.0
+xgboost==3.0.4           # XGB_v1 notebook only
+hyperopt==0.2.7          # hyperparameter tuning notebooks
+shap==0.52.0             # SHAP plots and per-attribute score breakdown
+
+# Plots
+matplotlib==3.10.5
+
+# MLflow tracking server and client
+mlflow==3.12.0
+email-validator==2.3.0   # needed by the MLflow server; not installed automatically
+
+# Running notebooks in VS Code / Jupyter (and papermill inside Docker)
+ipykernel==6.29.5

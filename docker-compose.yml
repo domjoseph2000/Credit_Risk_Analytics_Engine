@@ -34,6 +34,9 @@ services:
       - airflow_db:/opt/airflow
     environment:
       HOMECREDIT_DATA_ROOT: /data
+      # Training notebooks log runs/models through the mlflow service below
+      # (by service name -- containers on this network can't use localhost)
+      MLFLOW_TRACKING_URI: http://mlflow:5000
       AIRFLOW_ADMIN_USER: admin
       AIRFLOW_ADMIN_PASSWORD: admin
       AIRFLOW__CORE__LOAD_EXAMPLES: "False"
@@ -55,6 +58,8 @@ services:
       AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "True"
       AIRFLOW__WEBSERVER__WEB_SERVER_WORKER_TIMEOUT: 300
       
+    depends_on:
+      - mlflow
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
@@ -74,8 +79,21 @@ services:
       - "${DATA_PATH:-./data}:/data"
     environment:
       MLFLOW_ALLOW_FILE_STORE: "true"
+    # Tracking server: metadata in /data/mlflow.db (SQLite); artifacts are
+    # uploaded/downloaded THROUGH this server (--serve-artifacts) and stored
+    # under /data/mlruns. Clients only ever see mlflow-artifacts:/ URIs, so the
+    # same runs and registered models work from Windows (localhost:5000) and
+    # from the pipeline container (mlflow:5000) -- no /data path baked in.
+    # --allowed-hosts: MLflow rejects unknown Host headers; "mlflow" is how
+    # the pipeline container addresses this service.
+    # mlflow pinned to the pipeline image's version (Dockerfile) so client and
+    # server agree.
     command: >
-      bash -c "pip install mlflow && mlflow ui --backend-store-uri file:///data/mlruns --host 0.0.0.0 --port 5000"
+      bash -c "pip install mlflow==3.12.0 && mlflow server
+      --backend-store-uri sqlite:////data/mlflow.db
+      --serve-artifacts --artifacts-destination /data/mlruns
+      --host 0.0.0.0 --port 5000
+      --allowed-hosts 'localhost,localhost:5000,127.0.0.1,127.0.0.1:5000,mlflow,mlflow:5000'"
     restart: unless-stopped
     
 volumes:

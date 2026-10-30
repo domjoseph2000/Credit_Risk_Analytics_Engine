@@ -2,8 +2,8 @@
 Home Credit – MDS Creation & Multicollinearity Test DAG
 =========================================
 Orchestrates model dataset (MDS) creation followed by VIF-based
-multicollinearity reduction, then funnels into hyperparameter tuning or
-straight to training.
+multicollinearity reduction, then triggers the model pipeline
+(04_model_pipeline: tuning -> training -> segmentation) for LightGBM_v1.
 
 **Pipeline**
 1. `create_mds` — runs `model_dataset_creation.ipynb`, joining every staged
@@ -14,8 +14,9 @@ straight to training.
    the reduced `model_dataset_final.parquet` that hyperparameter tuning and
    training consume. This step used to be a manual, undocumented step run
    outside any DAG — it's now wired in so the full pipeline runs end-to-end.
-3. Branches to hyperparameter tuning or straight to training based on a UI
-   toggle (`run_hyperopt`).
+3. Triggers `04_model_pipeline` for LightGBM_v1 -- with a full hyperparameter
+   search if the `run_hyperopt` toggle is on, otherwise with tuning='previous'
+   (saved hyperparameters, feature list refreshed for the new dataset).
 """
 from datetime import datetime, timedelta
 import os
@@ -45,14 +46,16 @@ UI_PARAMS = {
         "run_hyperopt": Param(
             default=False,
             type="boolean",
-            description="Perform Hyperparameter tuning after MDS creation? If False, the pipeline will proceed to model training using default hyperparameters"
+            description="After MDS creation, trigger 04_model_pipeline for LightGBM_v1 with a full "
+            "hyperparameter search (true) or with tuning='previous' (false, default): reuse the saved "
+            "hyperparameters and refresh the feature list for the new dataset, then train."
     )
 }
 
-# Notebook filename map: task_id -> (subfolder under SRC_DIR, notebook filename)
+# Notebook filename map: task_id -> (subfolder under SRC_DIR/Training, notebook filename)
 NOTEBOOKS = {
-    "create_mds"                  : ("MDS-Creation", "model_dataset_creation.ipynb"),
-    "multicollinearity_reduction" : ("Variable-Selection", "01b_multicollinearity_reduction.ipynb"),
+    "create_mds"                  : ("03_MDS-Creation", "model_dataset_creation.ipynb"),
+    "multicollinearity_reduction" : ("02_Variable-Selection", "01b_multicollinearity_reduction.ipynb"),
 }
 
 # ── Papermill runner ──────────────────────────────────────────────────────────
@@ -63,7 +66,7 @@ def run_notebook(task_id: str, **context) -> None:
     single fixed notebooks that self-configure from env vars.
     """
     subfolder, nb_name = NOTEBOOKS[task_id]
-    current_nb_dir  = os.path.join(SRC_DIR, subfolder)
+    current_nb_dir  = os.path.join(SRC_DIR, "Training", subfolder)
     current_out_dir = os.path.join(DATA_ROOT, "Model-Training", "notebook_outputs")
 
     # Ensure the output folder exists before writing to prevent OS errors
@@ -127,27 +130,30 @@ with DAG(
         """,
     )
 
-    # 3. The Branching Logic
+    # 3. The Branching Logic -- both paths run the full model pipeline for LightGBM_v1
+    # (tuning -> training -> segmentation); they differ only in the tuning mode
     @task.branch
     def choose_path(**context):
         if context["params"]["run_hyperopt"]:
-            return "trigger_model_tuning_dag"
+            return "trigger_pipeline_search"
         else:
-            return "trigger_training_dag"
+            return "trigger_pipeline_previous"
 
     branch_task = choose_path()
 
-    # 4. Path A: Trigger Hyperopt
+    # 4. Path A: full hyperparameter search, then train
     trigger_tuning_pipeline = TriggerDagRunOperator(
-        task_id="trigger_model_tuning_dag",
-        trigger_dag_id="04_hyperparameter_tuning",
-        wait_for_completion=False # Set to True if you want Prep to wait until Training finishes
+        task_id="trigger_pipeline_search",
+        trigger_dag_id="04_model_pipeline",
+        conf={"model_folder": "LightGBM_v1", "tuning": "search"},
+        wait_for_completion=False,
     )
 
-    # 5. Path B: Trigger Training directly
+    # 5. Path B: reuse saved hyperparameters (refreshing the feature list), then train
     trigger_training_pipeline = TriggerDagRunOperator(
-        task_id="trigger_training_dag",
-        trigger_dag_id="05_model_training"
+        task_id="trigger_pipeline_previous",
+        trigger_dag_id="04_model_pipeline",
+        conf={"model_folder": "LightGBM_v1", "tuning": "previous"},
     )
 
     # Dependencies

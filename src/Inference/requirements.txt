@@ -1,6 +1,7 @@
 pandas>=2.0
 numpy>=1.24
 lightgbm>=4.0
+shap>=0.44  # per-attribute points breakdown, see explainability.py
 mlflow>=2.9
 openpyxl>=3.1
 fastapi>=0.110

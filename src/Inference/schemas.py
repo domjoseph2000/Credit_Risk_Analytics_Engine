@@ -45,8 +45,27 @@ class ApplicationRequest(BaseModel):
         # if something required is truly missing.
 
 
+class ReasonCode(BaseModel):
+    """One attribute's points contribution to CREDIT_SCORE -- see
+    explainability.py for how these are derived from SHAP values. Positive
+    points push the score up (lower risk); negative points push it down."""
+    feature: str
+    points: float
+
+
 class ScoreResponse(BaseModel):
     SK_ID_CURR: int
     PROBA_DEFAULT: float = Field(..., ge=0, le=1)
     CREDIT_SCORE: int
     RISK_BAND: str
+    # Top contributors by |points|, not all ~24 features -- see
+    # explainability.top_reason_codes(). Doesn't affect CREDIT_SCORE itself,
+    # which is computed by pdo_scorecard.py exactly as before.
+    REASON_CODES: list[ReasonCode] = Field(default_factory=list)
+    # Whether this SK_ID_CURR matched any row in bureau/previous-loan/POS/
+    # installments/credit-card history. NOT reliably inferable from
+    # REASON_CODES -- SHAP can surface a NaN history feature as a top
+    # contributor (the model's learned default-split behavior for missing
+    # values), which looks influential without the feature having a real
+    # value for this applicant.
+    HAS_CREDIT_HISTORY: bool = False

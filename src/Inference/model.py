@@ -1,6 +1,6 @@
 """
 Loads the registered LightGBM pyfunc model (LightGBMProductionWrapper,
-see Model_LightGBM_v3.ipynb section 8) once and reuses it.
+see 02_training_LightGBM_v3.ipynb section 8) once and reuses it.
 
 Note on categorical columns: the wrapper re-casts its stored
 `categorical_features` list to pandas 'category' dtype internally on

@@ -9,7 +9,7 @@ Two distinct checks, because they catch different failure modes:
 
 1. Structural: does config.SELECTED_FEATURES_PATH (what assemble_features
    reads at runtime) actually match the feature list the training notebook
-   (Model_LightGBM_v3.ipynb) read when the deployed model was fit? These are
+   (02_training_LightGBM_v3.ipynb) read when the deployed model was fit? These are
    two separate files on disk with no shared source of truth, so they can
    silently drift -- assemble_features() only fails loudly if a name it
    expects is entirely absent from the joined table, not if its own expected
@@ -44,12 +44,12 @@ from features.pipeline import assemble_features, load_expected_feature_list  # n
 RAW_DIR = Path(config.DATA_ROOT) / "Input"
 GROUND_TRUTH_PATH = Path(config.DATA_ROOT) / "Model-Training" / "ModelDataset" / "model_dataset_final.parquet"
 
-# The file the training notebook (Model_LightGBM_v3.ipynb, cell 4,
+# The file the training notebook (02_training_LightGBM_v3.ipynb, cell 4,
 # PATH_SELECTED_VARS) actually reads -- the authoritative feature list for
 # whatever model is currently registered. config.SELECTED_FEATURES_PATH is a
 # separate copy meant to mirror it; nothing enforces they stay in sync.
 TRAINING_FEATURE_LIST_PATH = (
-    Path(config.SRC_ROOT) / "Model-Training" / "LightGBM_v3" / "selected_features.xlsx"
+    Path(config.SRC_ROOT) / "Training" / "04_Model-Development" / "LightGBM_v3" / "selected_features.xlsx"
 )
 
 RAW_FILES = {

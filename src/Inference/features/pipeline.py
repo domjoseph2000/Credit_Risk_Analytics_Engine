@@ -5,7 +5,14 @@ This is deliberately the ONE place where raw tables become model input,
 called identically by batch scoring, the real-time API, and (should you
 choose) your training notebooks. If this drifts from what training used,
 you get silent skew, not an error -- so `assemble_features` fails loudly
-if the VIF-reduced feature list doesn't match what's available.
+if the model's expected feature list doesn't match what's available.
+
+Rebuilt for the LightGBM_v4 (@prod) feature set (see
+data/Model-Training/ModelOutput/LightGBM_v4/lgbm_feature_importance.xlsx).
+credit_card is now wired in -- v3 didn't use any credit card features, v4
+does. pos_cash now also needs previous_application (for POS_AVG_CREDIT_TO_APPL);
+installments no longer does (its previous_application-derived feature
+isn't in v4's list).
 """
 import logging
 from pathlib import Path
@@ -15,6 +22,7 @@ import config
 from . import (
     application,
     bureau,
+    credit_card,
     installments,
     pos_cash,
     previous_application,
@@ -25,26 +33,25 @@ logger = logging.getLogger(__name__)
 # Which raw columns each table actually needs, keyed the same way as
 # raw_tables/assemble_features. Lets any CSV loader (batch script, notebook,
 # Airflow task) pass usecols=RAW_COLUMN_REQUIREMENTS[key] instead of reading
-# full tables -- bureau/previous_application/installments are multi-million
-# row files where most columns are never touched by feature engineering.
-# credit_card and bureau_balance are omitted: neither is currently wired
-# into assemble_features below (credit_card.py is a TODO stub).
-
+# full tables -- bureau/previous_application/installments/credit_card are
+# multi-million row files where most columns are never touched by feature
+# engineering.
 RAW_COLUMN_REQUIREMENTS: dict[str, list[str]] = {
     "application": application.REQUIRED_COLUMNS,
     "bureau": bureau.REQUIRED_COLUMNS,
     "previous_application": previous_application.REQUIRED_COLUMNS,
     "pos_cash": pos_cash.REQUIRED_COLUMNS,
     "installments": installments.REQUIRED_COLUMNS,
+    "credit_card": credit_card.REQUIRED_COLUMNS,
 }
 
 
 def load_expected_feature_list(path: Path | None = None) -> list[str]:
     """
-    Reads the same file Model_LightGBM_v3.ipynb reads: an xlsx with a
-    'feature' column, already produced by your upstream feature-selection
-    step. This is not a separate export you need to create -- it already
-    exists once that notebook has been run.
+    Reads config.SELECTED_FEATURES_PATH: an xlsx with a 'feature' column,
+    listing exactly the columns the currently-promoted (@prod) model was
+    trained on -- copy the 'feature' column out of that model's
+    lgbm_feature_importance.xlsx whenever a new model is promoted.
     """
     path = path or config.SELECTED_FEATURES_PATH
     features_df = pd.read_excel(path)
@@ -55,9 +62,9 @@ def merge_feature_frames(app_df: pd.DataFrame, feature_frames: dict[str, pd.Data
     """
     app_df: output of application.build_features().
     feature_frames: dict with keys among "bureau", "previous_application",
-        "pos_cash", "installments", each the output of that table's own
-        build_features() (already SK_ID_CURR-deduplicated, one row per
-        applicant).
+        "pos_cash", "installments", "credit_card", each the output of that
+        table's own build_features() (already SK_ID_CURR-deduplicated, one
+        row per applicant).
 
     Joins everything on SK_ID_CURR, validates the result against the
     model's expected feature list, and downcasts dtypes to match training.
@@ -68,7 +75,7 @@ def merge_feature_frames(app_df: pd.DataFrame, feature_frames: dict[str, pd.Data
     a different feature matrix than the single-process path.
     """
     merged = app_df
-    for key in ("bureau", "previous_application", "pos_cash", "installments"):
+    for key in ("bureau", "previous_application", "pos_cash", "installments", "credit_card"):
         if key in feature_frames:
             merged = merged.merge(feature_frames[key], on="SK_ID_CURR", how="left")
 
@@ -78,8 +85,8 @@ def merge_feature_frames(app_df: pd.DataFrame, feature_frames: dict[str, pd.Data
         raise ValueError(
             f"{len(missing)} features the model expects are missing after "
             f"feature assembly (e.g. {missing[:10]}). This means either a raw "
-            f"table wasn't supplied, or a feature module's TODO hasn't been "
-            f"filled in yet with the notebook logic that produces it."
+            f"table wasn't supplied, or a feature module's logic hasn't been "
+            f"updated to match the currently-promoted model's feature list."
         )
 
     # Reindex to the exact training column order -- LightGBM is positional,
@@ -110,7 +117,7 @@ def assemble_features(raw_tables: dict[str, pd.DataFrame]) -> pd.DataFrame:
     itself. Used by realtime_api.py, Batch_Inference.ipynb
 
     raw_tables: dict with keys among
-        "application", "bureau", "bureau_balance", "previous_application",
+        "application", "bureau", "previous_application",
         "pos_cash", "credit_card", "installments"
 
     Missing optional tables are fine -- their aggregates just won't be joined,
@@ -122,12 +129,13 @@ def assemble_features(raw_tables: dict[str, pd.DataFrame]) -> pd.DataFrame:
 
     # Every other raw table is Home Credit's full history for every
     # applicant it's ever seen, not just this batch (bureau.csv/
-    # previous_application.csv/installments_payments.csv are multi-million
-    # row files) -- filter each to this batch's SK_ID_CURR values before
-    # aggregating, or feature engineering burns time/memory on IDs the
-    # merge in merge_feature_frames would drop anyway. Taken from the raw
-    # application table (still its original int64 dtype), not app_df,
-    # since app_df's SK_ID_CURR has already been cast to string.
+    # previous_application.csv/installments_payments.csv/
+    # credit_card_balance.csv are multi-million row files) -- filter each to
+    # this batch's SK_ID_CURR values before aggregating, or feature
+    # engineering burns time/memory on IDs the merge in merge_feature_frames
+    # would drop anyway. Taken from the raw application table (still its
+    # original int64 dtype), not app_df, since app_df's SK_ID_CURR has
+    # already been cast to string.
     valid_ids = set(raw_tables["application"]["SK_ID_CURR"])
 
     feature_frames: dict[str, pd.DataFrame] = {}
@@ -139,15 +147,17 @@ def assemble_features(raw_tables: dict[str, pd.DataFrame]) -> pd.DataFrame:
             raw_tables["previous_application"], valid_ids
         )
 
-    if "pos_cash" in raw_tables:
-        feature_frames["pos_cash"] = pos_cash.build_features(raw_tables["pos_cash"], valid_ids)
-
-    # if "credit_card" in raw_tables:
-    #     feature_frames["credit_card"] = credit_card.build_features(raw_tables["credit_card"], valid_ids)
+    if "pos_cash" in raw_tables and "previous_application" in raw_tables:
+        feature_frames["pos_cash"] = pos_cash.build_features(
+            raw_tables["pos_cash"], raw_tables["previous_application"], valid_ids
+        )
 
     if "installments" in raw_tables:
         feature_frames["installments"] = installments.build_features(
-            raw_tables["installments"], raw_tables["previous_application"], valid_ids
+            raw_tables["installments"], valid_ids
         )
+
+    if "credit_card" in raw_tables:
+        feature_frames["credit_card"] = credit_card.build_features(raw_tables["credit_card"], valid_ids)
 
     return merge_feature_frames(app_df, feature_frames)

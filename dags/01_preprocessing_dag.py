@@ -55,7 +55,7 @@ DATA_ROOT   = os.environ.get("HOMECREDIT_DATA_ROOT", "/data")
 SRC_DIR     = os.environ.get("HOMECREDIT_SRC_DIR",   "/src")
 
 # 2. Build your nested paths dynamically
-NB_DIR      = os.path.join(SRC_DIR, "Preprocess")
+NB_DIR      = os.path.join(SRC_DIR, "Training", "01_Preprocess")
 
 OUTPUT_DIR  = os.path.join(DATA_ROOT, "Model-Training", "Staging")
 NB_OUT_DIR  = os.path.join(DATA_ROOT, "Model-Training", "notebook_outputs")

@@ -2,11 +2,11 @@
 Batch inference DAG.
 
 Feature engineering runs as one task per raw table (application, bureau,
-previous_application, pos_cash, installments) -- all five in parallel,
-since none of them depend on each other -- followed by join_features
-(merges the five into one matrix) and score_features (scores it), kept
-as separate tasks so a scoring failure can be retried without redoing
-the join. Mirrors 01_preprocessing_dag.py's per-table task
+previous_application, pos_cash, installments, credit_card) -- all six in
+parallel, since none of them depend on each other -- followed by
+join_features (merges the six into one matrix) and score_features
+(scores it), kept as separate tasks so a scoring failure can be retried
+without redoing the join. Mirrors 01_preprocessing_dag.py's per-table task
 pattern rather than score_model_input.py's single sequential script, so
 a failure/slowdown in one table is isolated and retried independently
 instead of rerunning everything.
@@ -101,6 +101,7 @@ with DAG(
     from batch_feature_tasks import (  # noqa: E402
         build_application_features,
         build_bureau_features,
+        build_credit_card_features,
         build_installments_features,
         build_pos_cash_features,
         build_previous_application_features,
@@ -128,6 +129,10 @@ with DAG(
         task_id="build_installments_features",
         python_callable=build_installments_features,
     )
+    build_credit_card = PythonOperator(
+        task_id="build_credit_card_features",
+        python_callable=build_credit_card_features,
+    )
 
     join = PythonOperator(
         task_id="join_features",
@@ -138,5 +143,12 @@ with DAG(
         python_callable=score_features,
     )
 
-    build_tasks = [build_application, build_bureau, build_previous_application, build_pos_cash, build_installments]
+    build_tasks = [
+        build_application,
+        build_bureau,
+        build_previous_application,
+        build_pos_cash,
+        build_installments,
+        build_credit_card,
+    ]
     wait_for_raw_data >> build_tasks >> join >> score

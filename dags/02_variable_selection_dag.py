@@ -40,7 +40,7 @@ import papermill as pm
 DATA_ROOT   = os.environ.get("HOMECREDIT_DATA_ROOT", "/data")
 SRC_DIR     = os.environ.get("HOMECREDIT_SRC_DIR",   "/src")
 
-VAR_SEL_DIR = os.path.join(SRC_DIR, "Variable-Selection")
+VAR_SEL_DIR = os.path.join(SRC_DIR, "Training", "02_Variable-Selection")
 NB_OUT_DIR  = os.path.join(DATA_ROOT, "Model-Training", "notebook_outputs")
 
 os.makedirs(NB_OUT_DIR, exist_ok=True)
@@ -115,7 +115,7 @@ with DAG(
         Loads all processed parquets, computes per-feature AUC, t-test,
         Cohen's d, univariate logistic coefficient, VIF, and target
         correlation. Scores each feature and writes results to Excel.
-        Output: `src/Variable-Selection/numeric_selection_metrics_full_df.xlsx`
+        Output: `data/Model-Training/Variable-Selection/numeric_selection_metrics_full_df.xlsx`
         """,
     )
 

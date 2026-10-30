@@ -1,9 +1,10 @@
 """
 Central config for the inference pipeline.
 
-Values below are pinned to what Model_LightGBM_v3.ipynb and
-Credit_Scoring.ipynb actually use, not generic defaults -- keep this file
-in sync if those notebooks change.
+Values below are pinned to what the currently-promoted (@prod) training
+notebook and Credit_Scoring.ipynb actually use, not generic defaults --
+keep this file (and src/Inference/features/, src/Inference/selected_features.xlsx)
+in sync whenever a new model version is promoted. Currently: 02_training_LightGBM_v4.ipynb.
 """
 import os
 from pathlib import Path
@@ -13,12 +14,13 @@ DATA_ROOT = os.environ.get("HOMECREDIT_DATA_ROOT", r"a:\Dominic\My Projects\Home
 SRC_ROOT = os.environ.get("HOMECREDIT_SRC_DIR", r"a:\Dominic\My Projects\Home Credit\src")
 
 # --- MLflow ---
-# Your training notebook uses a local file-based tracking store, not a
-# server -- whatever process runs inference (batch worker, API container)
-# needs filesystem access to this path, e.g. a mounted volume in Docker.
-MLFLOW_TRACKING_URI = os.getenv(
-    "MLFLOW_TRACKING_URI", f"file:{DATA_ROOT}/mlruns".replace("\\", "/")
-)
+# The docker-compose `mlflow` tracking server: it keeps metadata in
+# DATA_ROOT/mlflow.db (SQLite) and serves artifacts over HTTP, so model files
+# are downloaded through it rather than opened from a path baked in at logging
+# time. Inside a compose container use http://mlflow:5000. Model versions
+# registered before the switch still point at file:///data/mlruns/... and
+# only load where /data exists (see README's "Known gaps").
+MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
 MODEL_NAME = os.getenv("HOME_CREDIT_MODEL_NAME", "HomeCredit_Scorecard_Model")
 # Your notebook registers versions but leaves promotion as a manual step:
 # assign the "prod" alias yourself in the MLflow UI after reviewing a run.
@@ -27,9 +29,10 @@ MODEL_NAME = os.getenv("HOME_CREDIT_MODEL_NAME", "HomeCredit_Scorecard_Model")
 MODEL_ALIAS = "prod"
 
 # --- Feature contract ---
-# The exact feature list + order the model was trained on. This is the file
-# Model_LightGBM_v3.ipynb reads as `features_df` -- not a separate export
-# step, it already exists once you've run that notebook.
+# The exact feature list the currently-promoted model was trained on --
+# copy the 'feature' column out of that model's lgbm_feature_importance.xlsx
+# (data/Model-Training/ModelOutput/<model_folder>/) whenever a new model is
+# promoted to @prod.
 SELECTED_FEATURES_PATH = Path(
     os.getenv(
         "HOME_CREDIT_SELECTED_FEATURES",
@@ -61,9 +64,9 @@ MAX_SCORE = 850
 # band starts; pd.cut uses right=False so a score of exactly 620 falls in B.
 BAND_BINS = [MIN_SCORE, 560, 590, 620, 650, MAX_SCORE + 1]
 BAND_LABELS = [
-    "E - Very High Risk",
-    "D - High Risk",
-    "C - Medium Risk",
-    "B - Low Risk",
-    "A - Very Low Risk",
+    "E — Very High Risk",
+    "D — High Risk",
+    "C — Medium Risk",
+    "B — Low Risk",
+    "A — Very Low Risk",
 ]

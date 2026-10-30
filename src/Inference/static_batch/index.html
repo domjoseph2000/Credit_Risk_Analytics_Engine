@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Home Credit — Batch Monitoring</title>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --panel: #ffffff;
+    --border: #dde1e6;
+    --text: #1f2530;
+    --muted: #67707d;
+    --accent: #2f6fed;
+    --green: #1a8f4c;
+    --red: #d1403f;
+    --amber: #b8860b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); }
+  header { padding: 20px 28px 14px; border-bottom: 1px solid var(--border); background: var(--panel); display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 12px; }
+  header h1 { margin: 0 0 4px; font-size: 20px; }
+  header p { margin: 0; color: var(--muted); font-size: 13px; }
+  .date-picker { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  select {
+    padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; background: #fff; color: var(--text);
+  }
+  main { padding: 20px 28px 40px; max-width: 1100px; }
+  #empty { color: var(--muted); font-size: 14px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin-bottom: 20px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px;
+  }
+  .card .label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 6px; }
+  .card .value { font-size: 26px; font-weight: 700; }
+  .card .delta { font-size: 12.5px; margin-top: 4px; }
+  .delta.up { color: var(--green); }
+  .delta.down { color: var(--red); }
+  .delta.flat, .delta.none { color: var(--muted); }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; margin-bottom: 20px; }
+  .panel h2 { font-size: 14px; margin: 0 0 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .psi-badge { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 8px; font-size: 13.5px; font-weight: 600; }
+  .psi-badge.stable { background: #e8f6ee; color: var(--green); }
+  .psi-badge.moderate_shift { background: #fdf3dc; color: var(--amber); }
+  .psi-badge.significant_shift { background: #fdecea; color: var(--red); }
+  .psi-note { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .band-row { display: grid; grid-template-columns: 150px 1fr 1fr 70px; align-items: center; gap: 10px; margin-bottom: 10px; font-size: 12.5px; }
+  .band-name { text-align: right; }
+  .band-track { position: relative; height: 14px; background: #eef0f3; border-radius: 4px; overflow: hidden; }
+  .band-fill { position: absolute; top: 0; left: 0; bottom: 0; }
+  .band-track-label { font-size: 10.5px; color: var(--muted); text-align: center; margin-top: 1px; }
+  .band-legend { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+  .trends { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 700px) { .trends { grid-template-columns: 1fr; } }
+  .trend-title { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  svg.trend { width: 100%; height: 90px; overflow: visible; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>Home Credit — Batch Monitoring</h1>
+    <p>Reads <code>DATA_ROOT/Inference/BatchOutput/&lt;date&gt;/</code> -- no model needed, works even when the real-time API can't load @prod.</p>
+  </div>
+  <div class="date-picker">
+    <label for="dateSelect">Snapshot date</label>
+    <select id="dateSelect"></select>
+  </div>
+</header>
+
+<main>
+  <div id="empty" style="display:none;">No batch runs found under <code>DATA_ROOT/Inference/BatchOutput/</code> yet -- run <code>score_model_input.py</code> at least once.</div>
+
+  <div id="content" style="display:none;">
+
+    <div class="cards">
+      <div class="card">
+        <div class="label">Applicants scored</div>
+        <div class="value" id="cardVolume">—</div>
+        <div class="delta" id="deltaVolume"></div>
+      </div>
+      <div class="card">
+        <div class="label">Mean score</div>
+        <div class="value" id="cardScore">—</div>
+        <div class="delta" id="deltaScore"></div>
+      </div>
+      <div class="card">
+        <div class="label">Mean PD</div>
+        <div class="value" id="cardPd">—</div>
+        <div class="delta" id="deltaPd"></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Population stability (PROBA_DEFAULT) vs previous run</h2>
+      <div id="psiWrap"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Risk band mix -- current vs previous run</h2>
+      <div id="bandRows"></div>
+      <div class="band-legend">
+        <span style="color:var(--accent);">■</span> current run &nbsp;
+        <span style="color:var(--muted);">■</span> previous run
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Trend across all runs</h2>
+      <div class="trends">
+        <div>
+          <div class="trend-title">Volume (applicants scored)</div>
+          <svg class="trend" id="trendVolume" viewBox="0 0 300 90" preserveAspectRatio="none"></svg>
+        </div>
+        <div>
+          <div class="trend-title">Mean score</div>
+          <svg class="trend" id="trendScore" viewBox="0 0 300 90" preserveAspectRatio="none"></svg>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<script>
+const BAND_COLORS = { E: '#d1403f', D: '#d97a25', C: '#b8860b', B: '#5fae3c', A: '#1a8f4c' };
+const BAND_ORDER = ['E', 'D', 'C', 'B', 'A'];
+let allRuns = [];
+
+function fmtInt(n) { return n === null || n === undefined ? '—' : Math.round(n).toLocaleString(); }
+function fmtScore(n) { return n === null || n === undefined ? '—' : n.toFixed(0); }
+function fmtPct(n) { return n === null || n === undefined ? '—' : (n * 100).toFixed(2) + '%'; }
+
+function deltaEl(el, value, fmt, higherIsBetter) {
+  if (value === null || value === undefined) {
+    el.textContent = 'No prior run to compare';
+    el.className = 'delta none';
+    return;
+  }
+  const dir = value > 0 ? 'up' : (value < 0 ? 'down' : 'flat');
+  const good = value === 0 ? 'flat' : ((value > 0) === higherIsBetter ? 'up' : 'down');
+  const arrow = value > 0 ? '▲' : (value < 0 ? '▼' : '—');
+  el.textContent = `${arrow} ${fmt(Math.abs(value))} vs previous run`;
+  el.className = 'delta ' + good;
+}
+
+async function loadRuns() {
+  const res = await fetch('/api/runs');
+  const body = await res.json();
+  allRuns = body.runs;
+
+  const select = document.getElementById('dateSelect');
+  if (!allRuns.length) {
+    document.getElementById('empty').style.display = 'block';
+    document.getElementById('content').style.display = 'none';
+    return;
+  }
+  select.innerHTML = allRuns.map(r => `<option value="${r.date}">${r.date}</option>`).join('');
+  select.value = allRuns[allRuns.length - 1].date; // latest by default
+  document.getElementById('content').style.display = 'block';
+
+  renderTrends();
+  await loadSnapshot(select.value);
+}
+
+document.getElementById('dateSelect').addEventListener('change', (e) => loadSnapshot(e.target.value));
+
+async function loadSnapshot(date) {
+  const res = await fetch(`/api/snapshot/${encodeURIComponent(date)}`);
+  const body = await res.json();
+  const m = body.metrics;
+  const cmp = body.comparison;
+
+  document.getElementById('cardVolume').textContent = fmtInt(m.applicant_count);
+  document.getElementById('cardScore').textContent = fmtScore(m.mean_score);
+  document.getElementById('cardPd').textContent = fmtPct(m.mean_pd);
+
+  deltaEl(document.getElementById('deltaVolume'), cmp && cmp.deltas.applicant_count, fmtInt, true);
+  deltaEl(document.getElementById('deltaScore'), cmp && cmp.deltas.mean_score, (v) => v.toFixed(1) + ' pts', true);
+  deltaEl(document.getElementById('deltaPd'), cmp && cmp.deltas.mean_pd, fmtPct, false);
+
+  renderPsi(cmp);
+  renderBandRows(m, cmp);
+}
+
+function renderPsi(cmp) {
+  const wrap = document.getElementById('psiWrap');
+  if (!cmp) {
+    wrap.innerHTML = '<div class="psi-note">No prior run yet -- PSI needs a previous run\'s PROBA_DEFAULT distribution as a baseline.</div>';
+    return;
+  }
+  const labels = { stable: 'Stable', moderate_shift: 'Moderate shift', significant_shift: 'Significant shift' };
+  wrap.innerHTML = `
+    <span class="psi-badge ${cmp.psi_verdict}">PSI ${cmp.psi_proba_default.toFixed(4)} -- ${labels[cmp.psi_verdict]}</span>
+    <div class="psi-note">Baseline (expected) = ${cmp.previous_date} run's PROBA_DEFAULT distribution, compared against the selected run (actual). Same formula and 0.10 / 0.25 thresholds as the train-vs-test PSI check in 02_training_LightGBM_v4.ipynb.</div>`;
+}
+
+function renderBandRows(m, cmp) {
+  const rows = document.getElementById('bandRows');
+  rows.innerHTML = BAND_ORDER.map(letter => {
+    const cur = m.band_pct[letter] || 0;
+    const prev = cmp ? (cur - cmp.deltas.band_pct[letter]) : null;
+    const maxPct = Math.max(cur, prev || 0, 0.01);
+    const curWidth = (cur / maxPct) * 100;
+    const prevWidth = prev !== null ? (prev / maxPct) * 100 : 0;
+    return `
+      <div class="band-row">
+        <div class="band-name" style="color:${BAND_COLORS[letter]};">${letter}</div>
+        <div>
+          <div class="band-track"><div class="band-fill" style="width:${curWidth}%; background:${BAND_COLORS[letter]};"></div></div>
+          <div class="band-track-label">${fmtPct(cur)}</div>
+        </div>
+        <div>
+          <div class="band-track"><div class="band-fill" style="width:${prevWidth}%; background:${BAND_COLORS[letter]}; opacity:0.4;"></div></div>
+          <div class="band-track-label">${prev === null ? '—' : fmtPct(prev)}</div>
+        </div>
+        <div style="text-align:right; color:var(--muted);">${cmp ? (cmp.deltas.band_pct[letter] >= 0 ? '+' : '') + (cmp.deltas.band_pct[letter] * 100).toFixed(1) + 'pp' : ''}</div>
+      </div>`;
+  }).join('');
+}
+
+function sparkline(svgId, values, color) {
+  const svg = document.getElementById(svgId);
+  if (values.length < 2) {
+    svg.innerHTML = `<text x="150" y="45" text-anchor="middle" font-size="11" fill="var(--muted)">Need at least 2 runs to plot a trend</text>`;
+    return;
+  }
+  const w = 300, h = 90, pad = 8;
+  const min = Math.min(...values), max = Math.max(...values);
+  const range = (max - min) || 1;
+  const points = values.map((v, i) => {
+    const x = pad + (i / (values.length - 1)) * (w - 2 * pad);
+    const y = h - pad - ((v - min) / range) * (h - 2 * pad);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const dots = values.map((v, i) => {
+    const [x, y] = points[i].split(',');
+    return `<circle cx="${x}" cy="${y}" r="2.5" fill="${color}"><title>${v.toFixed(2)}</title></circle>`;
+  }).join('');
+  svg.innerHTML = `
+    <polyline points="${points.join(' ')}" fill="none" stroke="${color}" stroke-width="2"></polyline>
+    ${dots}
+    <text x="${pad}" y="${h}" font-size="9" fill="var(--muted)">${min.toFixed(0)}</text>
+    <text x="${w - pad}" y="${h}" font-size="9" fill="var(--muted)" text-anchor="end">${max.toFixed(0)}</text>`;
+}
+
+function renderTrends() {
+  sparkline('trendVolume', allRuns.map(r => r.applicant_count), '#2f6fed');
+  sparkline('trendScore', allRuns.map(r => r.mean_score).filter(v => v !== null), '#1a8f4c');
+}
+
+loadRuns();
+</script>
+
+</body>
+</html>

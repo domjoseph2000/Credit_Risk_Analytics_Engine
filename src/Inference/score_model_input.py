@@ -23,7 +23,7 @@ Outputs:
 
 Prerequisite: HomeCredit_Scorecard_Model must have a version with the
 "prod" alias assigned (done manually in the MLflow UI after review -- see
-Model_LightGBM_v3.ipynb section 8), and selected_features.xlsx must exist.
+02_training_LightGBM_v3.ipynb section 8), and selected_features.xlsx must exist.
 """
 import argparse
 import logging
@@ -42,6 +42,7 @@ sys.path.insert(0, INFERENCE_PKG_SRC)
 
 import config  # noqa: E402
 import pdo_scorecard  # noqa: E402
+from explainability import explain_contributions  # noqa: E402
 from model import predict_proba  # noqa: E402
 from features.pipeline import assemble_features, RAW_COLUMN_REQUIREMENTS  # noqa: E402
 
@@ -76,6 +77,7 @@ TABLE_FILES = {
     "previous_application": "previous_application.csv",
     "pos_cash": "POS_CASH_balance.csv",
     "installments": "installments_payments.csv",
+    "credit_card": "credit_card_balance.csv",
 }
 
 
@@ -87,26 +89,54 @@ def parse_date(value: str) -> str:
     return value
 
 
-def load_raw_tables(app_data_dir: Path, raw_data_dir: Path) -> dict[str, pd.DataFrame]:
+def load_shared_history_tables(raw_data_dir: Path) -> dict[str, pd.DataFrame]:
     """
+    Loads every raw table EXCEPT application -- bureau/previous_application/
+    pos_cash/installments/credit_card, Home Credit's full history for every
+    applicant it's ever seen, not date-partitioned like application.csv.
+
+    Split out of load_raw_tables() so realtime_api.py can load and cache
+    these once at startup (functools.lru_cache), then filter each table to
+    a single SK_ID_CURR per request, instead of only ever having application-
+    form fields to work with -- see explainability.py's module docstring for
+    why real-time scoring needs this: 13 of the model's 24 features come
+    from these tables, not the application form itself.
+
     Reads only the raw columns each feature module actually consumes (see
     features/pipeline.py::RAW_COLUMN_REQUIREMENTS) instead of full tables --
-    bureau/previous_application/installments are multi-million-row CSVs, so
-    this is a large, free memory/IO win over reading every raw column.
+    these are multi-million-row CSVs, so this is a large, free memory/IO win
+    over reading every raw column.
     """
     tables: dict[str, pd.DataFrame] = {}
     for key, filename in TABLE_FILES.items():
-        source_dir = app_data_dir if key == "application" else raw_data_dir
-        path = source_dir / filename
+        if key == "application":
+            continue
+        path = raw_data_dir / filename
         if not path.exists():
-            if key == "application":
-                raise FileNotFoundError(f"application.csv is required and was not found at {path}")
             logger.warning("Table %s not found at %s, skipping", key, path)
             continue
 
         usecols = RAW_COLUMN_REQUIREMENTS.get(key)
         tables[key] = pd.read_csv(path, usecols=usecols)
         logger.info("Loaded %-22s %s", key, tables[key].shape)
+
+    return tables
+
+
+def load_raw_tables(app_data_dir: Path, raw_data_dir: Path) -> dict[str, pd.DataFrame]:
+    """
+    application.csv (this batch's new applicants) + the shared history
+    tables (every applicant Home Credit has ever seen).
+    """
+    app_path = app_data_dir / TABLE_FILES["application"]
+    if not app_path.exists():
+        raise FileNotFoundError(f"application.csv is required and was not found at {app_path}")
+
+    tables: dict[str, pd.DataFrame] = {
+        "application": pd.read_csv(app_path, usecols=RAW_COLUMN_REQUIREMENTS.get("application")),
+    }
+    logger.info("Loaded %-22s %s", "application", tables["application"].shape)
+    tables.update(load_shared_history_tables(raw_data_dir))
 
     return tables
 
@@ -162,13 +192,23 @@ def main(application_date: str) -> None:
     band_summary = build_band_summary(scored_df)
     logger.info("Risk band distribution:\n%s", band_summary.to_string(index=False, float_format="{:.4f}".format))
 
+    # Per-attribute points breakdown -- reason codes for every applicant in
+    # this batch, not just a sample. Computed from the same feature_df/model
+    # already used to score above; failing here never changes scored_df,
+    # since explain_contributions() only reads from the trained model.
+    reason_codes_df = explain_contributions(feature_df)
+    logger.info("Reason codes shape: %s", reason_codes_df.shape)
+
     scored_path = output_dir / "scored_applicants.parquet"
     scored_df.to_parquet(scored_path, index=False)
     band_summary_path = output_dir / "band_summary.csv"
     band_summary.to_csv(band_summary_path, index=False)
+    reason_codes_path = output_dir / "reason_codes.parquet"
+    reason_codes_df.to_parquet(reason_codes_path, index=False)
 
     logger.info("Saved scored applicants to %s", scored_path)
     logger.info("Saved band summary to %s", band_summary_path)
+    logger.info("Saved reason codes to %s", reason_codes_path)
 
 
 if __name__ == "__main__":

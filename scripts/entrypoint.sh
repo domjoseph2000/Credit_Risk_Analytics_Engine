@@ -20,14 +20,33 @@ mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/Model-Training/notebook_outputs"
 mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/mlruns"
 mkdir -p "${HOMECREDIT_DATA_ROOT:-/data}/Inference"
 
+# 1b. Download raw Kaggle input files if Input/ is empty
+INPUT_DIR="${HOMECREDIT_DATA_ROOT:-/data}/Input"
+KAGGLE_COMPETITION="${KAGGLE_COMPETITION:-home-credit-default-risk}"
+
+echo ""
+echo "--- Checking Kaggle input files (${KAGGLE_COMPETITION}) ---"
+if [ -n "$(ls -A "${INPUT_DIR}"/*.csv 2>/dev/null)" ]; then
+    echo "CSVs already present in ${INPUT_DIR}, skipping download."
+elif [ -f "${KAGGLE_CONFIG_DIR:-$HOME/.kaggle}/kaggle.json" ] || { [ -n "${KAGGLE_USERNAME:-}" ] && [ -n "${KAGGLE_KEY:-}" ]; }; then
+    echo "Downloading ${KAGGLE_COMPETITION} into ${INPUT_DIR} ..."
+    kaggle competitions download -c "${KAGGLE_COMPETITION}" -p "${INPUT_DIR}"
+    unzip -o "${INPUT_DIR}/${KAGGLE_COMPETITION}.zip" -d "${INPUT_DIR}"
+    rm -f "${INPUT_DIR}/${KAGGLE_COMPETITION}.zip"
+    echo "Kaggle input files downloaded to ${INPUT_DIR}."
+else
+    echo "WARNING: no Kaggle credentials found (mount kaggle.json into"
+    echo "  ${KAGGLE_CONFIG_DIR:-$HOME/.kaggle}/kaggle.json, or set KAGGLE_USERNAME + KAGGLE_KEY)."
+    echo "  Skipping download -- place the competition CSVs in ${INPUT_DIR} manually."
+fi
 
 # 2. Create Source/Logic directories
-mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/Preprocess"
-mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/Variable-Selection"
-mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/MDS-Creation"
-mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/Hyperparameter-Tuning"
-mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/Model-Training"
-mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/Scoring"
+mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/Training/01_Preprocess"
+mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/Training/02_Variable-Selection"
+mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/Training/03_MDS-Creation"
+mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/Training/04_Model-Development"
+mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/Training/05_Segmentation-Analysis"
+mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/Training/06_Scoring"
 mkdir -p "${HOMECREDIT_SRC_DIR:-/src}/Inference"
 
 # 3. Initialise Airflow DB on first run
