@@ -1,34 +1,34 @@
 #!/usr/bin/env python
 """
-Verifies that the features the inference pipeline produces
-(features/pipeline.py::assemble_features) match what the model was actually
-trained on, restricted to the "final attributes" -- the columns in the
-selected-features list that actually reach the model.
+Checks that inference calculates the model's features exactly as training did.
 
-Two distinct checks, because they catch different failure modes:
+Run this after promoting a new model or changing anything in features/.
+If inference calculated a feature differently from training, the model
+would quietly give wrong scores rather than an error -- this is what catches it.
 
-1. Structural: does config.SELECTED_FEATURES_PATH (what assemble_features
-   reads at runtime) actually match the feature list the training notebook
-   (02_training_LightGBM_v3.ipynb) read when the deployed model was fit? These are
-   two separate files on disk with no shared source of truth, so they can
-   silently drift -- assemble_features() only fails loudly if a name it
-   expects is entirely absent from the joined table, not if its own expected
-   list is already wrong/stale.
+Two checks
+----------
+1. Same feature list? Inference reads its list from selected_features.xlsx
+   (config.SELECTED_FEATURES_PATH). The @prod model was trained on the list
+   in HyperParameters/<PROD_MODEL_FOLDER>/selected_features.json. They're
+   separate files that must be kept in step by hand; this reports any
+   feature in one but not the other.
 
-2. Value-level: for features present in both, are the *values* the same for
-   the same SK_ID_CURR? A column can exist under the same name on both sides
-   and still be computed differently (different aggregation window, "365243
-   is a sentinel" only handled on one side, etc.) -- assemble_features()
-   cannot catch this by construction, since it only checks column names.
+2. Same values? For a sample of applicants, rebuilds the features from the
+   raw CSVs with the inference code and compares them, applicant by
+   applicant, with the training dataset (model_dataset_final.parquet). A
+   feature can have the right name but still be calculated differently
+   (e.g. a different time window), which only a value check catches.
+   Prints each feature's match rate; 1.0 means every value matched.
 
-Usage:
+Usage (project environment active):
     python verify_feature_parity.py [--sample-n 20000] [--out report.csv]
 
-Requires the real Home Credit raw CSVs in DATA_ROOT/Input and the training
-notebook's output at
+Needs the raw Kaggle CSVs in DATA_ROOT/Input and
 DATA_ROOT/Model-Training/ModelDataset/model_dataset_final.parquet.
 """
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -36,40 +36,47 @@ import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 
+# Make this folder's modules (config, features) importable
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import config  # noqa: E402
+from utils import config  # noqa: E402
 from features.pipeline import assemble_features, load_expected_feature_list  # noqa: E402
 
 RAW_DIR = Path(config.DATA_ROOT) / "Input"
+# The training dataset: the "right answers" to compare against
 GROUND_TRUTH_PATH = Path(config.DATA_ROOT) / "Model-Training" / "ModelDataset" / "model_dataset_final.parquet"
 
-# The file the training notebook (02_training_LightGBM_v3.ipynb, cell 4,
-# PATH_SELECTED_VARS) actually reads -- the authoritative feature list for
-# whatever model is currently registered. config.SELECTED_FEATURES_PATH is a
-# separate copy meant to mirror it; nothing enforces they stay in sync.
+# The feature list the @prod model was actually trained on: its tuning
+# notebook wrote it and its training notebook read it. Change
+# PROD_MODEL_FOLDER when you promote a different version
+# (LightGBM_v4 = MLflow version 23, the current @prod).
+PROD_MODEL_FOLDER = "LightGBM_v4"
 TRAINING_FEATURE_LIST_PATH = (
-    Path(config.SRC_ROOT) / "Training" / "04_Model-Development" / "LightGBM_v3" / "selected_features.xlsx"
+    Path(config.DATA_ROOT) / "Model-Training" / "HyperParameters" / PROD_MODEL_FOLDER / "selected_features.json"
 )
 
+# Raw files to rebuild the features from. application_train.csv (not a
+# batch's application.csv), because those are the applicants in the training data.
 RAW_FILES = {
     "application": "application_train.csv",
     "bureau": "bureau.csv",
     "previous_application": "previous_application.csv",
     "pos_cash": "POS_CASH_balance.csv",
     "installments": "installments_payments.csv",
+    "credit_card": "credit_card_balance.csv",
 }
 
 
 def check_feature_list_drift() -> list[str]:
-    """Structural check: does the inference feature list match training's?"""
+    """Check 1: print any feature that's in inference's list but not training's, or the other way round. Returns inference's list."""
     inference_list = load_expected_feature_list()
-    training_list = pd.read_excel(TRAINING_FEATURE_LIST_PATH)["feature"].tolist()
+    with open(TRAINING_FEATURE_LIST_PATH) as f:
+        training_list = json.load(f)["features"]
 
     missing_from_inference = sorted(set(training_list) - set(inference_list))
     extra_in_inference = sorted(set(inference_list) - set(training_list))
 
-    print(f"Training feature list  ({TRAINING_FEATURE_LIST_PATH.name} under LightGBM_v3): "
+    print(f"Training feature list  ({TRAINING_FEATURE_LIST_PATH.name} under {PROD_MODEL_FOLDER}): "
           f"{len(training_list)} features")
     print(f"Inference feature list ({config.SELECTED_FEATURES_PATH.name} under Inference): "
           f"{len(inference_list)} features")
@@ -85,20 +92,29 @@ def check_feature_list_drift() -> list[str]:
 
 
 def load_raw_tables(sample_n: int | None) -> dict[str, pd.DataFrame]:
+    """
+    Load the raw tables, optionally for a random sample of sample_n applicants
+    (fixed seed, so reruns use the same sample). History tables are cut down
+    to those applicants.
+    """
     app = pd.read_csv(RAW_DIR / RAW_FILES["application"])
     if sample_n:
         app = app.sample(n=min(sample_n, len(app)), random_state=42)
     ids = set(app["SK_ID_CURR"])
 
     tables = {"application": app}
-    for key in ("bureau", "previous_application", "pos_cash", "installments"):
+    for key in ("bureau", "previous_application", "pos_cash", "installments", "credit_card"):
         df = pd.read_csv(RAW_DIR / RAW_FILES[key])
         tables[key] = df[df["SK_ID_CURR"].isin(ids)]
     return tables
 
 
 def compare_feature(train_col: pd.Series, infer_col: pd.Series) -> float:
-    """Row-aligned match rate for one feature; NaN==NaN counts as a match."""
+    """
+    Share of applicants whose value matches, for one feature (0 to 1).
+    Numbers count as equal within a tiny rounding tolerance; blank on both
+    sides counts as a match.
+    """
     if pd.api.types.is_numeric_dtype(train_col) and pd.api.types.is_numeric_dtype(infer_col):
         match = np.isclose(
             train_col.to_numpy(dtype="float64"),
@@ -112,7 +128,11 @@ def compare_feature(train_col: pd.Series, infer_col: pd.Series) -> float:
 
 
 def main(sample_n: int | None, out_path: str | None):
+    """Run both checks and print a match rate per feature (optionally also saved as a CSV)."""
+    # Check 1: same feature list
     inference_list = check_feature_list_drift()
+
+    # Check 2: same values -- rebuild the features with the inference code...
 
     print(f"Loading raw tables from {RAW_DIR} ...")
     raw_tables = load_raw_tables(sample_n)
@@ -121,6 +141,7 @@ def main(sample_n: int | None, out_path: str | None):
     infer_df = assemble_features(raw_tables)
     infer_df["SK_ID_CURR"] = infer_df["SK_ID_CURR"].astype("int64")
 
+    # ...load the same applicants' features from the training dataset...
     print(f"Loading ground-truth training features from {GROUND_TRUTH_PATH} ...")
     cols_available = pq.ParquetFile(GROUND_TRUTH_PATH).schema.names
     train_df = pd.read_parquet(
@@ -129,6 +150,7 @@ def main(sample_n: int | None, out_path: str | None):
     )
     train_df["SK_ID_CURR"] = train_df["SK_ID_CURR"].astype("int64")
 
+    # ...and line them up applicant by applicant
     merged = train_df.merge(infer_df, on="SK_ID_CURR", how="inner", suffixes=("_train", "_infer"))
     print(f"Compared population: {len(merged)} applicants "
           f"(train had {len(train_df)}, inference produced {len(infer_df)})\n")

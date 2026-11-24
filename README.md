@@ -49,8 +49,8 @@ a browser.
 │  src/Inference/features/*.py  ──►  assemble_features()                  │
 │       ▲                                    │                            │
 │       │                                    ▼                            │
-│  data/Input (shared history)      src/Inference/model.py (MLflow load)  │
-│  data/Inference/BatchInput        src/Inference/pdo_scorecard.py        │
+│  data/Input (shared history)      src/Inference/utils/model.py (MLflow) │
+│  data/Inference/BatchInput        src/Inference/utils/pdo_scorecard.py  │
 │       │                                    │                            │
 │       ▼                                    ▼                            │
 │  score_model_input.py (batch, CLI/Airflow)   realtime_api.py (FastAPI)  │
@@ -94,7 +94,7 @@ src/
                                  Payment_installments_data, Prevloans_data (.ipynb)
     02_Variable-Selection/      select_vars.ipynb, 01b_multicollinearity_reduction.ipynb
     03_MDS-Creation/            model_dataset_creation.ipynb
-    04_Model-Development/       One folder per model version (LightGBM_v1..v4/, XGB_v1/), each with
+    04_Model-Development/       One folder per model version (LightGBM_v1..v6/, XGB_v1..v3/), each with
                                  01_tuning_<version>.ipynb and 02_training_<version>.ipynb
     05_Segmentation-Analysis/   Segmentation_Analysis.ipynb
     06_Scoring/                 Credit_Scoring.ipynb (PDO scorecard, calibration, KS, PSI)
@@ -131,7 +131,7 @@ prefix, so the run order is visible directly in the Airflow DAGs list.
 | `02_variable_selection` | [02_variable_selection_dag.py](dags/02_variable_selection_dag.py) | Runs `select_vars.ipynb`. Split out of `01_preprocessing` (was that DAG's `task_select_vars`) so it can be retried/skipped independently. By default, triggers `03_mds_creation_and_multicollinearity_test` once it finishes — set the `trigger_mds_creation` param to `false` to stop after variable selection. |
 | `03_mds_creation_and_multicollinearity_test` | [03_mds_creation_and_multicollinearity_test_dag.py](dags/03_mds_creation_and_multicollinearity_test_dag.py) | Runs `model_dataset_creation.ipynb`, then `01b_multicollinearity_reduction.ipynb` (VIF-based feature pruning — previously a manual step run outside any DAG); then triggers `04_model_pipeline` for LightGBM_v1 — with a full hyperparameter search if the `run_hyperopt` toggle is on, otherwise with `tuning='previous'`. |
 | `04_model_pipeline` | [04_model_pipeline_dag.py](dags/04_model_pipeline_dag.py) | Builds and evaluates one model version: `check_inputs` → tuning notebook → training notebook → `Segmentation_Analysis.ipynb`. Pick the version with `model_folder`; the DAG looks up both notebooks itself. See below for params. |
-| `05_scoring` | [05_scoring_dag.py](dags/05_scoring_dag.py) | Builds the scorecard (`Credit_Scoring.ipynb`: PDO score, A–E risk bands, KS) for the **final model only** — run it manually once you've compared versions and picked one. No retraining: reads that version's saved `test_predictions.parquet`. Its `model_folder` dropdown lists the versions that have been trained. |
+| `05_scoring` | [05_scoring_dag.py](dags/05_scoring_dag.py) | Builds the scorecard (`Credit_Scoring.ipynb`: PDO score, A–E risk bands, KS) for the **final model only** — run it manually once you've compared versions and picked one. No retraining: reads that version's saved `test_predictions.parquet`. Its `model_folder` dropdown lists the versions that have been trained and defaults to the most recently trained one. |
 | `home_credit_batch_inference` | [inference_batch_dag.py](dags/inference_batch_dag.py) | Batch-scores a dated applicant file: one task per raw table → join → score. |
 
 All numbered training DAGs execute notebooks via
@@ -140,11 +140,18 @@ All numbered training DAGs execute notebooks via
 `data/Model-Training/notebook_outputs/` for audit/debugging
 (`04_model_pipeline` and `05_scoring` name them `<task>__<model_folder>__<date>.ipynb`).
 
+**Watching a run's progress:** `04_model_pipeline` streams each notebook's printed
+output into the Airflow task log as it runs (papermill `log_output=True`) — open the
+task (e.g. `tune_model`) → **Logs**. During a Hyperopt search the tuning notebooks
+print one line per trial, `[trial 12/150] CV AUC 0.7712 | best so far 0.7740`
+(the executed copy in `notebook_outputs/` only fills in once a cell finishes, so
+the search cell looks empty there until all trials are done).
+
 **`04_model_pipeline` params** (trigger screen, or `--conf`):
 
 | Param | Options | Meaning |
 |---|---|---|
-| `model_folder` | `LightGBM_v1` (default) … `LightGBM_v4`, `XGB_v1` | Which version. The choices are discovered: every folder under `src/Training/04_Model-Development/`, which must hold exactly one `01_tuning*.ipynb` and one `02_training*.ipynb` — so adding a version (copy a folder, rename the notebooks) needs no DAG edit |
+| `model_folder` | `LightGBM_v1` … `LightGBM_v6`, `XGB_v1`, `XGB_v2`, `XGB_v3`; default: the most recently trained (newest `test_predictions.parquet`) | Which version. The choices are discovered: every folder under `src/Training/04_Model-Development/`, which must hold exactly one `01_tuning*.ipynb` and one `02_training*.ipynb` — so adding a version (copy a folder, rename the notebooks) needs no DAG edit |
 | `tuning` | `search` / `previous` (default) / `skip` | Full Hyperopt search (hours); reuse saved hyperparameters and refresh the feature list (minutes); or no tuning step (only allowed once that version's tuning outputs exist) |
 | `run_training`, `run_segmentation` | true (default) / false | Stop early, e.g. `run_training=false` to only tune |
 
@@ -158,15 +165,16 @@ needs the same version's tuning outputs (`selected_features.json`,
 `*_resolved_best.json`), and the old hand-off between the DAGs only
 forwarded `model_folder`, not the training notebook name — so automatic
 chaining only worked for LightGBM_v1. On 2026-10-27 the merged DAG was
-renumbered `04_model_pipeline` → `04_model_pipeline`, and scoring moved out
+renumbered `05_model_pipeline` → `04_model_pipeline`, and scoring moved out
 of it into `05_scoring`: the scorecard is only needed for the final model,
 and scoring every version overwrote the chosen model's scorecard (outputs
 now go to `ScoreOutput/<model_folder>/`).
 
-**Note:** the model actually registered to MLflow and referenced by the
-inference side (`config.SELECTED_FEATURES_PATH`, `verify_feature_parity.py`)
-is **LightGBM_v3**, while `04_model_pipeline` defaults to LightGBM_v1 — pick
-`model_folder` explicitly when (re)training the production model.
+**Note:** the model at the MLflow `@prod` alias is **LightGBM_v4**, and the
+inference side's feature list (`config.SELECTED_FEATURES_PATH`) matches it,
+while `04_model_pipeline` and `05_scoring` default to the most recently
+trained version, which isn't necessarily the production one — pick
+`model_folder` explicitly when (re)training or scoring the production model.
 
 ### DAG dependency chain (Preprocessing)
 
@@ -230,14 +238,18 @@ isn't auto-created under Airflow 3.x's `airflow db migrate`.
 
 ## 4. Training pipeline — what each stage does
 
-1. **Preprocess** (`src/Preprocess/*.ipynb`) — one notebook per raw table.
+1. **Preprocess** (`src/Training/01_Preprocess/*.ipynb`) — one notebook per raw table.
    Cleans sentinel values (e.g. `365243`, `XNA`), engineers ratios/flags, and
    aggregates history tables (Bureau, POS, CreditCard, Payment_installments)
    into rolling time windows (`_LAST3M/6M/1Y/2Y/3Y`) plus recent-vs-historical
    ratio features (`_LAST6M_TO_3Y_RATIO`, via `add_period_ratio_features()`
    in `CreditCard_data.ipynb`, reused in `POS_data.ipynb` and
    `Payment_installments_data.ipynb`). Output: one processed parquet per
-   table in `data/Model-Training/Staging/`.
+   table in `data/Model-Training/Staging/`. `Application_data.ipynb` also
+   adds `EXT_SCORE_MEAN` (added 2026-11-21): the average of the three
+   external credit scores `EXT_SOURCE_1/2/3`, using whichever are present,
+   kept alongside the three; `features/application.py` builds it the same
+   way for inference.
 2. **Variable selection (first pass)** (`select_vars.ipynb`, run by its own
    `02_variable_selection` DAG, triggered by `01_preprocessing` by default) —
    computes per-feature AUC, t-test, Cohen's d, univariate logistic
@@ -251,9 +263,12 @@ isn't auto-created under Airflow 3.x's `airflow db migrate`.
    same DAG, runs right after MDS creation) — VIF-based feature pruning
    against `model_dataset_initial.parquet`, protecting features with strong
    predictive scores from step 2's output; writes `model_dataset_final.parquet`
-   (initial file is left untouched).
+   (initial file is left untouched). Features in `ALWAYS_KEEP_FEATURES`
+   (currently `EXT_SCORE_MEAN`, whose VIF of ~11.6 against the three
+   `EXT_SOURCE` scores would otherwise remove it) are never removed and are
+   left out of the VIF calculation.
 5. **Hyperparameter tuning** (`src/Training/04_Model-Development/<model_folder>/01_tuning_<model_folder>.ipynb`)
-   — each model version (LightGBM_v1–v4, XGB_v1) is one folder holding its
+   — each model version (LightGBM_v1–v6, XGB_v1–v3) is one folder holding its
    tuning and training notebooks side by side. The tuning notebook is
    where each version's **feature selection rule** lives, and it chooses
    that version's **hyperparameters**, writing to
@@ -321,44 +336,84 @@ isn't auto-created under Airflow 3.x's `airflow db migrate`.
    (From 2026-10-19 to 2026-10-20 the cross-validation briefly ran in the
    tuning notebooks instead; it was moved back to keep tuning about
    hyperparameters only.)
-   Section 6 of every training notebook (LightGBM v1–v4, XGB_v1),
+   Section 6 of every training notebook (LightGBM v1–v6, XGB v1–v3),
    **Feature Importance & Interpretability**, covers 6.a gain-based
-   importance, 6.b SHAP and 6.c the combined table. **SHAP** (6.b): exact
+   importance, 6.b SHAP and partial dependence, and 6.c the combined table.
+   **Partial dependence** (6.b): for the 6 most important numeric features,
+   the average predicted PD on the test set as that one feature is set to
+   each of 50 values between its 5th and 95th percentile, plus a dashed line
+   for the average PD when it's missing — the model's direction for each
+   feature at a glance. Computed directly (scikit-learn's
+   `PartialDependenceDisplay` drew empty or flat panels for features with
+   missing values), adds ~3 minutes per run, saved as
+   `PartialDependence.png` and logged as `plots/PartialDependence.png`.
+   **SHAP** (6.b): exact
    TreeSHAP values for 2,000
    test-set applicants, checked to reproduce the model's raw output, saved
    to `ModelOutput/<model_folder>/` and logged to the MLflow run —
    `plots/SHAP_Summary.png` (beeswarm), `plots/SHAP_Waterfall_Example.png`
-   (one high-risk applicant), `metadata/shap_feature_importance.xlsx`
-   (mean |SHAP| per feature) and `metadata/shap_values_sample.parquet`
+   (one high-risk applicant) and `metadata/shap_values_sample.parquet`
    (each sampled applicant's SHAP values, base value and raw margin, indexed
    by `SK_ID_CURR`). The same TreeSHAP decomposition produces the
    per-attribute points and reason codes at inference time
-   (`src/Inference/explainability.py`).
-   **Feature importance** (6.a, `lgbm_feature_importance.xlsx`) is **total gain** — LightGBM models are
+   (`src/Inference/utils/explainability.py`); how a SHAP value becomes
+   points, with a worked example, is in `src/Inference/README.md`
+   ("Reason codes — how a feature's points are derived").
+   **Feature importance** (6.a) is **total gain** — LightGBM models are
    built with `importance_type='gain'`, XGBoost uses gain by default — not
    split count, which over-rewards features with many distinct values.
    Feature selection per version (the rule lives in the tuning notebook,
    which saves the list to `selected_features.json`; training reads it, and
    logs it to MLflow as `metadata/selected_features.json`):
-   - **v1** — all features in `model_dataset_final.parquet`;
+   - **v1** and **XGB_v1** — all features in `model_dataset_final.parquet`;
    - **v2** — v1's top features by out-of-fold SHAP: `cumulative_shap_share`
      ≤ `SHAP_CUTOFF` (90%) in v1's `feature_importance_combined.xlsx`
      (`summary` sheet) — 57 of 186 in the 2026-10-22 v1 run;
-   - **v3** (and XGB_v1) — the fixed list in
-     `src/Training/04_Model-Development/LightGBM_v3/selected_features.xlsx`;
+   - **XGB_v2** — the same rule applied to XGB_v1's table, so XGB_v1 must be
+     trained first;
+   - **XGB_v3** — the fixed list in
+     `src/Training/04_Model-Development/XGB_v3/selected_features.xlsx`
+     (36 features: originally 39 of XGB_v2's 65; since 2026-11-21 it uses
+     `EXT_SCORE_MEAN` in place of the three `EXT_SOURCE` scores, like v3);
+   - **v3** — the fixed list in
+     `src/Training/04_Model-Development/LightGBM_v3/selected_features.xlsx`
+     (32 features; since 2026-11-21 it uses `EXT_SCORE_MEAN` in place of
+     the three `EXT_SOURCE` scores, so v4, built from v3, can only pick up
+     the mean). On 2026-11-21 both fixed lists dropped
+     `DAYS_LAST_PHONE_CHANGE` (no longer produced; they already had
+     `YEARS_SINCE_PHONE_CHANGE`, the same value in years) and swapped
+     `CREDITCARD_CNT_DRAWINGS_ATM_CURRENT_MEAN_LAST3Y` for its `_LAST2Y`
+     version (correlation 0.993), which the VIF step now keeps instead; the
+     previous lists are kept as `selected_features-before-2026-11-21.xlsx`;
    - **v4** — v3's top features by cumulative gain share
-     (`IMPORTANCE_CUTOFF` = 90%) in v3's `lgbm_feature_importance.xlsx`.
+     (`IMPORTANCE_CUTOFF` = 90%) in v3's `feature_importance_combined.xlsx`
+     (`summary` sheet), so v3 must be trained first;
+   - **v5** — the fixed list in
+     `src/Training/04_Model-Development/LightGBM_v5/selected_features.xlsx`:
+     only `EXT_SOURCE_1`, `EXT_SOURCE_2` and `EXT_SOURCE_3`. A baseline for how
+     much the three external scores achieve on their own;
+   - **v6** — the fixed list in
+     `src/Training/04_Model-Development/LightGBM_v6/selected_features.xlsx`:
+     v4's 23 features from its 2026-11-05 run minus the three `EXT_SOURCE` scores
+     (20 features), showing how much the model achieves without them.
 
    The **combined table** (6.c,
-   `feature_importance_combined.xlsx`, logged under `metadata/`) has two
+   `feature_importance_combined.xlsx`, logged under `metadata/`) is each
+   version's one feature table (it replaced `lgbm_feature_importance.xlsx`,
+   `xgb_feature_importance.xlsx` and `shap_feature_importance.xlsx`; runs
+   from before 2026-11-04 still have those files). It has two
    sheets. `summary`, sorted by out-of-fold SHAP (each CV fold's model
    explaining applicants it didn't train on), reads left to right: `rank`,
    `feature`, `shap_share`, `cumulative_shap_share`, `gain_rank`,
-   `gain_share`, `cumulative_gain_share` (counted in gain order — the
-   `cumulative_importance` the next version selects on), `split_rank`,
-   `rank_gap` (gain rank − SHAP rank) and `test_shap_rank` (reporting only);
+   `gain_share`, `cumulative_gain_share` (counted in gain order — what the
+   next version selects on), `split_rank`, `rank_gap` (gain rank − SHAP
+   rank), `test_shap_rank` (reporting only), then `auc_score`, `gini_abs`,
+   `missing_pct` and `points` from variable selection (`select_vars.ipynb`;
+   blank for categorical features and for features added or renamed since
+   it last ran);
    shares are formatted as percentages and the header/feature columns are
-   frozen. `raw_values` holds the unscaled measures. Pick features for the
+   frozen. `raw_values` holds the unscaled measures and variable selection's
+   other metrics. Pick features for the
    next version from the SHAP or gain share columns, never from test-set
    SHAP — that would bias the test metrics.
    **Promotion to the `prod`
@@ -370,7 +425,9 @@ isn't auto-created under Airflow 3.x's `airflow db migrate`.
    and KS *within* each segment (gender, education, family/housing/income
    type, occupation, organization, age band, and whether the applicant has
    any Home Credit bureau history at all) — catches a segment the overall
-   AUC/KS hides, flags it, and writes charts + an Excel summary to
+   AUC/KS hides, flags it, and writes an Excel summary plus one chart per
+   segment attribute (`bad_rate_by_segment/<attribute>.png`,
+   `auc_by_segment/<attribute>.png`) to
    `data/Model-Training/ModelOutput/<model_folder>/SegmentationAnalysis/`.
    Purely diagnostic: never changes what scoring computes.
 8. **Scoring/scorecard** (`src/Training/06_Scoring/Credit_Scoring.ipynb`) —
@@ -386,25 +443,32 @@ for the model you've chosen.
 
 ## 5. Inference pipeline — architecture
 
-Everything production-facing lives in `src/Inference/`:
+Everything production-facing lives in `src/Inference/`. The entry points sit at the top level; the supporting modules they import are in `src/Inference/utils/`:
 
 | File | Role |
 |---|---|
-| `config.py` | Central config — data paths, MLflow URI/model name/alias, PDO constants, risk-band thresholds. Pinned to match `02_training_LightGBM_v3.ipynb` / `Credit_Scoring.ipynb`; keep in sync manually if those change. |
+| `utils/config.py` | Central config — data paths, MLflow URI/model name/alias, PDO constants, risk-band thresholds. Pinned to match the `@prod` model (`02_training_LightGBM_v4.ipynb`, MLflow version 23) / `Credit_Scoring.ipynb`; keep in sync manually if those change. |
 | `features/pipeline.py` | `assemble_features(raw_tables)` — the **one place** raw CSVs become the model's feature matrix. Calls each table's `features/<table>.py::build_features()`, then `merge_feature_frames()` (join on `SK_ID_CURR`, validate against `selected_features.xlsx`, downcast dtypes to match training). Used by batch, real-time, and the Airflow per-table tasks alike, so all three paths can't silently diverge. |
-| `features/application.py`, `bureau.py`, `previous_application.py`, `pos_cash.py`, `installments.py` | Per-table feature engineering, mirroring the Preprocess notebooks' logic. `credit_card.py` exists as a TODO stub (not currently wired into `assemble_features`). |
-| `model.py` | `load_model()` (cached MLflow pyfunc load via `models:/{name}@{alias}`), `predict_proba(feature_df)`. |
-| `pdo_scorecard.py` | `proba_to_score()`, `score_to_risk_band()` — same PDO/band logic as `Credit_Scoring.ipynb`. |
+| `features/application.py`, `bureau.py`, `previous_application.py`, `pos_cash.py`, `installments.py`, `credit_card.py` | Per-table feature engineering, mirroring the Preprocess notebooks' logic. Built for the `@prod` model's 23 features (MLflow version 23, `LightGBM_v4`); `verify_feature_parity.py` confirms all 23 match `model_dataset_final.parquet` for every applicant. `application.py` also builds `EXT_SCORE_MEAN`, `CODE_GENDER` and `NAME_EDUCATION_TYPE` for the LightGBM_v4 retrained on 2026-11-21 (not promoted); its 23 features also all match (checked on 30,000 applicants). |
+| `utils/model.py` | `load_model()` (cached MLflow pyfunc load via `models:/{name}@{alias}`), `predict_proba(feature_df)`. |
+| `utils/pdo_scorecard.py` | `proba_to_score()`, `score_to_risk_band()` — same PDO/band logic as `Credit_Scoring.ipynb`. |
 | `score_model_input.py` | Shared `score_applicants(feature_df)` (also called by `realtime_api.py`) + a CLI (`main(application_date)`) that loads raw tables, assembles features, scores, and writes batch output. Runs identically standalone or from Airflow. |
-| `realtime_api.py` | FastAPI app (`POST /score`) for single-applicant scoring — validates via `schemas.py`, calls `assemble_features` + `score_applicants`. |
-| `schemas.py` | Pydantic `ApplicationRequest` / `ScoreResponse` models for the API. |
-| `batch_feature_tasks.py` | Per-table Airflow task callables used by `dags/inference_batch_dag.py` — same feature logic as `score_model_input.py`, split into one task per table + `join_features` + `score_features`, writing intermediate parquets to `data/Inference/BatchFeatures/<date>/`. |
+| `realtime_api.py` | FastAPI app (`POST /score`) for single-applicant scoring — validates via `utils/schemas.py`, calls `assemble_features` + `score_applicants`. |
+| `utils/schemas.py` | Pydantic `ApplicationRequest` / `ScoreResponse` models for the API. |
+| `utils/explainability.py` | SHAP-based points per feature (reason codes) for batch output and the real-time API; never changes the scores. |
+| `batch_dashboard_api.py` | FastAPI batch monitoring dashboard (port 8001) — reads the files batch scoring wrote, never loads the model. |
+| `utils/batch_metrics.py` | The dashboard's numbers: per-batch band mix, averages, and batch-to-batch comparison with PSI drift check. |
+| `utils/batch_feature_tasks.py` | Per-table Airflow task callables used by `dags/inference_batch_dag.py` — same feature logic as `score_model_input.py`, split into one task per table + `join_features` + `score_features`, writing intermediate parquets to `data/Inference/BatchFeatures/<date>/`. |
 | `verify_feature_parity.py` | Compares `assemble_features()` output against the training ground truth (`model_dataset_final.parquet`) — structural (feature list) and value-level (row match rate) checks. |
 | `Batch_Inference.ipynb` | Notebook version of batch scoring, for interactive/manual runs; reuses `score_model_input.load_raw_tables()`. |
 
-Batch and real-time scoring both funnel through the same
-`assemble_features()` → `score_applicants()` call chain, so they can't
-silently compute different results for the same applicant.
+Batch and real-time scoring all use the same per-table `build_features()`,
+`merge_feature_frames()` and `score_applicants()`, so they can't silently
+compute different results for the same applicant. The CLI, notebook and
+real-time API call the first two through `assemble_features()`; the Airflow
+DAG calls them directly, one task per table. Flow diagrams for each use
+case (Airflow, CLI/notebook, real-time API, dashboard) are in
+`src/Inference/README.md`, "Flow of control, by use case".
 
 ## 6. Running it
 
@@ -592,7 +656,7 @@ trigger` commands from §6.3:
      --conf '{"model_folder": "XGB_v1", "tuning": "search", "run_training": false}'
    ```
    or set the same params on the trigger screen in the UI. Order across
-   versions: v1 before v2 (v2 selects from v1's output) and v3 before v4.
+   versions: v1 before v2 (v2 selects from v1's output, and XGB_v2 from XGB_v1's) and v3 before v4.
    Pass `--conf '{"run_segmentation": false}'` to stop after training. Running the notebooks by hand
    instead: set `HPO_HYPERPARAMS_SOURCE` (tuning: `search` / `previous`) and
    `HOMECREDIT_HYPERPARAMS` (training: `tuned` / `defaults`) before starting
@@ -682,17 +746,24 @@ and `band_summary.csv` (applicant count / mean score / mean PD per risk band).
 
 ### 6.6 Run real-time scoring
 
-```bash
-cd src/Inference
-pip install -r requirements.txt   # first time only — fastapi, uvicorn, pydantic, etc.
+Run it from the project environment (`project_env`), not base Miniconda —
+base has no `lightgbm`/`shap`. The MLflow server must be running on
+`localhost:5000` (the Docker `mlflow` service, or §6.9).
+
+```powershell
+project_env\Scripts\Activate.ps1
+cd src\Inference
 uvicorn realtime_api:app --host 0.0.0.0 --port 8000
 
 # Or with auto-reload while developing:
 uvicorn realtime_api:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-The model loads once at startup (`@app.on_event("startup")`) and is cached
-in-process — no MLflow round trip per request.
+The web form is then at http://localhost:8000/ui/. Startup takes ~35 s: the
+model loads once (`@app.on_event("startup")`) and the five history tables
+(~30 M rows) are read into memory, so later requests need no MLflow round
+trip or disk read. This works outside Docker only for `@prod` versions
+logged after the switch to the MLflow server (version 23 onward — see §7).
 
 ```bash
 curl -X POST http://localhost:8000/score \
@@ -725,14 +796,13 @@ match rate on a sample of known applicants).
 ```bash
 cd src/Inference
 pip install -r requirements.txt
-pytest
+pytest tests
 ```
 
-`test_inference_smoke.py` checks the plumbing (join logic, feature-contract
-enforcement, PDO math, A–E band edges) without needing a real MLflow model
-or real data. `test_history_store.py` currently fails on import — it
-exercises a `history_store` module that doesn't exist in this package yet
-(see §7).
+The tests are in `src/Inference/tests/` and need no MLflow model or real
+data: `test_inference_smoke.py` checks the plumbing (feature-contract
+enforcement, PDO math, A–E band edges) and `test_batch_metrics.py` the
+batch dashboard's numbers.
 
 ### 6.9 Run the notebooks on your own machine (no Docker)
 
@@ -865,28 +935,39 @@ correctly by itself.
 
 - **Model promotion is manual**: nothing auto-assigns the `prod` alias after
   training — do it in the MLflow UI after reviewing the run's metrics.
-- **`04_model_pipeline` defaults to `LightGBM_v1`**, not the production
-  `LightGBM_v3` model — pick `model_folder` explicitly (see §6.4) when
-  (re)training the production model. Its `tuning` param defaults to
+- **`04_model_pipeline` and `05_scoring` default to the most recently
+  trained version** (the newest `ModelOutput/<model_folder>/test_predictions.parquet`,
+  re-checked whenever Airflow re-parses the DAG files), not the production
+  `LightGBM_v4` model — pick `model_folder` explicitly (see §6.4) when
+  (re)training or scoring the production model. `04_model_pipeline`'s `tuning` param defaults to
   `previous`, which needs a previous search for that version; `check_inputs`
   stops the run with a clear message if it doesn't exist yet.
-- **`credit_card.py` feature module is a TODO stub** — credit card features
-  are not currently included in `assemble_features()`'s output, even though
-  `CreditCard_data.ipynb` produces them for training. If the model's
-  selected-feature list includes `CREDITCARD_*` columns, inference will fail
-  the missing-features check in `merge_feature_frames()` until this is
-  filled in.
-- **`.env`-based config** (instead of hardcoded default paths in `config.py`
+- **Promoting a model doesn't update inference by itself**: the feature
+  modules in `src/Inference/features/` only compute the columns the current
+  `@prod` model uses. After promoting a version with a different feature
+  list, copy its list into `src/Inference/selected_features.xlsx`, add any
+  missing features to the modules, set `PROD_MODEL_FOLDER` in
+  `verify_feature_parity.py`, and run that script until every feature
+  matches.
+- **`.env`-based config** (instead of hardcoded default paths in `utils/config.py`
   / notebooks) has been discussed but not implemented — paths currently
   resolve via `HOMECREDIT_DATA_ROOT` / `HOMECREDIT_SRC_DIR` env vars with a
   hardcoded local Windows path as the fallback default.
 - **MLflow model versions 1–11 only load inside Docker**: all MLflow access
   now goes through the tracking server (§6.10), so runs and model versions
   registered from 2026-10-15 on (v12+) load anywhere the server is
-  reachable. Versions 1–11 (including the current `@prod`, v11) predate
-  that and still record an absolute `file:///data/mlruns/...` source, so
-  they load only where `/data` is mounted at that path; promoting a newly
-  trained version removes the limitation. Running a training notebook's
+  reachable. Versions 1–11 predate that and still record an absolute
+  `file:///data/mlruns/...` source, so they load only where `/data` is
+  mounted at that path. The current `@prod` (version 23) isn't affected;
+  this only matters if you roll `@prod` back to version 11 or earlier.
+  Running a training notebook's
   MLflow section, or inference, needs the server up —
   `python scripts/start_mlflow_server.py` locally (§6.9) or
   `docker compose up -d mlflow`.
+
+## ⚖️ License & Commercial Use
+
+This project is **free for individual, personal, and educational use**. 
+
+Commercial reuse or deployment within a business environment is **not permitted** without prior approval. 
+For commercial licensing requests, please contact me.

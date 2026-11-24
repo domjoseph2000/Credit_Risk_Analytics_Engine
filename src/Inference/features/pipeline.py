@@ -1,24 +1,25 @@
 """
-Single entrypoint that builds the exact feature matrix the model expects.
+Builds the feature table the model expects, from the raw data tables.
 
-This is deliberately the ONE place where raw tables become model input,
-called identically by batch scoring, the real-time API, and (should you
-choose) your training notebooks. If this drifts from what training used,
-you get silent skew, not an error -- so `assemble_features` fails loudly
-if the model's expected feature list doesn't match what's available.
+This is the one place where raw data becomes model input: batch scoring
+(both the Airflow DAG and score_model_input.py), the real-time API and
+Batch_Inference.ipynb all go through it. That's what keeps them consistent.
 
-Rebuilt for the LightGBM_v4 (@prod) feature set (see
-data/Model-Training/ModelOutput/LightGBM_v4/lgbm_feature_importance.xlsx).
-credit_card is now wired in -- v3 didn't use any credit card features, v4
-does. pos_cash now also needs previous_application (for POS_AVG_CREDIT_TO_APPL);
-installments no longer does (its previous_application-derived feature
-isn't in v4's list).
+If inference ever calculated a feature differently from training, the model
+would quietly give wrong scores rather than an error. So merge_feature_frames()
+stops with an error if any feature the model expects is missing, and
+verify_feature_parity.py checks the values against the training data.
+
+The feature list is the @prod model's (MLflow version 23, see
+data/Model-Training/HyperParameters/LightGBM_v4/selected_features.json).
+The feature modules also still make a few columns for the previous @prod
+(version 11); only the current model's columns are kept.
 """
 import logging
 from pathlib import Path
 import pandas as pd
 
-import config
+from utils import config
 from . import (
     application,
     bureau,
@@ -30,12 +31,9 @@ from . import (
 
 logger = logging.getLogger(__name__)
 
-# Which raw columns each table actually needs, keyed the same way as
-# raw_tables/assemble_features. Lets any CSV loader (batch script, notebook,
-# Airflow task) pass usecols=RAW_COLUMN_REQUIREMENTS[key] instead of reading
-# full tables -- bureau/previous_application/installments/credit_card are
-# multi-million row files where most columns are never touched by feature
-# engineering.
+# The raw columns each table's feature code reads. Code that loads the CSVs
+# can pass usecols=RAW_COLUMN_REQUIREMENTS[table] to read only these columns
+# -- most of the multi-million-row history files' columns are never used.
 RAW_COLUMN_REQUIREMENTS: dict[str, list[str]] = {
     "application": application.REQUIRED_COLUMNS,
     "bureau": bureau.REQUIRED_COLUMNS,
@@ -48,10 +46,10 @@ RAW_COLUMN_REQUIREMENTS: dict[str, list[str]] = {
 
 def load_expected_feature_list(path: Path | None = None) -> list[str]:
     """
-    Reads config.SELECTED_FEATURES_PATH: an xlsx with a 'feature' column,
-    listing exactly the columns the currently-promoted (@prod) model was
-    trained on -- copy the 'feature' column out of that model's
-    lgbm_feature_importance.xlsx whenever a new model is promoted.
+    The @prod model's features, in training order, from the 'feature' column
+    of selected_features.xlsx (config.SELECTED_FEATURES_PATH). When you
+    promote a new model, replace that list with the new version's
+    HyperParameters/<model_folder>/selected_features.json.
     """
     path = path or config.SELECTED_FEATURES_PATH
     features_df = pd.read_excel(path)
@@ -60,25 +58,27 @@ def load_expected_feature_list(path: Path | None = None) -> list[str]:
 
 def merge_feature_frames(app_df: pd.DataFrame, feature_frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
     """
-    app_df: output of application.build_features().
-    feature_frames: dict with keys among "bureau", "previous_application",
-        "pos_cash", "installments", "credit_card", each the output of that
-        table's own build_features() (already SK_ID_CURR-deduplicated, one
-        row per applicant).
+    Join the per-table features into the model's input table.
 
-    Joins everything on SK_ID_CURR, validates the result against the
-    model's expected feature list, and downcasts dtypes to match training.
-    This is the one place assemble_features() (single raw_tables dict,
-    single process) and the Airflow DAG's per-table tasks (each table
-    built in its own task, handed here as already-built parquets) both
-    funnel through -- so a task-per-table pipeline can't silently compute
-    a different feature matrix than the single-process path.
+    app_df: output of application.build_features() -- one row per applicant.
+    feature_frames: some or all of "bureau", "previous_application",
+        "pos_cash", "installments", "credit_card", each the output of that
+        table's build_features() (one row per applicant).
+
+    Joins everything on SK_ID_CURR (applicants with no history in a table get
+    blanks), keeps exactly the model's features in training order, and
+    converts number types to match training. Returns SK_ID_CURR + the features.
+
+    Both assemble_features() below and the Airflow DAG's join task (which
+    builds each table in its own task) end here, so they can't produce
+    different feature tables.
     """
     merged = app_df
     for key in ("bureau", "previous_application", "pos_cash", "installments", "credit_card"):
         if key in feature_frames:
             merged = merged.merge(feature_frames[key], on="SK_ID_CURR", how="left")
 
+    # Stop with a clear error if any feature the model needs wasn't produced
     expected = load_expected_feature_list()
     missing = [c for c in expected if c not in merged.columns]
     if missing:
@@ -89,18 +89,15 @@ def merge_feature_frames(app_df: pd.DataFrame, feature_frames: dict[str, pd.Data
             f"updated to match the currently-promoted model's feature list."
         )
 
-    # Reindex to the exact training column order -- LightGBM is positional,
-    # not name-aware, when fed a plain numpy array, and even with a DataFrame
-    # mismatched dtypes/order across categoricals can bite you.
+    # Keep only the model's features, in the exact order used in training
     id_col = merged[["SK_ID_CURR"]]
     feature_matrix = merged[expected].copy()
 
-    # model_dataset_creation.ipynb downcasts float64->float32 and
-    # int64->smallest-safe-int before training (see downcast_numeric there),
-    # so the registered model's MLflow signature expects those narrower
-    # dtypes. mlflow.pyfunc enforces the signature strictly and refuses to
-    # silently narrow float64->float32 itself, so this has to match on the
-    # way in or every prediction call raises SCHEMA_ENFORCEMENT_FAILED.
+    # Shrink number types the way model_dataset_creation.ipynb did before
+    # training (decimals to float32, whole numbers to the smallest type that
+    # fits). The registered model records the training types, and MLflow
+    # rejects input whose types don't match. (model.match_input_schema then
+    # fixes any column whose type depends on this batch's values.)
     float_cols = feature_matrix.select_dtypes(include="float64").columns
     int_cols = feature_matrix.select_dtypes(include="int64").columns
     if len(float_cols) > 0:
@@ -113,29 +110,23 @@ def merge_feature_frames(app_df: pd.DataFrame, feature_frames: dict[str, pd.Data
 
 def assemble_features(raw_tables: dict[str, pd.DataFrame]) -> pd.DataFrame:
     """
-    Input is raw CSVs. It calls each table's own build_features()
-    itself. Used by realtime_api.py, Batch_Inference.ipynb
+    Raw tables in, model input out, in one call. Used by the real-time API,
+    score_model_input.py and Batch_Inference.ipynb.
 
-    raw_tables: dict with keys among
-        "application", "bureau", "previous_application",
-        "pos_cash", "credit_card", "installments"
+    raw_tables: the raw data, keyed by table name -- "application" (required)
+        plus any of "bureau", "previous_application", "pos_cash",
+        "installments", "credit_card".
 
-    Missing optional tables are fine -- their aggregates just won't be joined,
-    and any resulting NaNs are handled the same way LightGBM handled them in
-    training (it natively supports missing values, so no imputation needed
-    unless your notebook did something custom).
+    A missing history table is fine: those features are just left blank, and
+    LightGBM handles blanks itself, as it did in training. (pos_cash also
+    needs "previous_application".)
     """
     app_df = application.build_features(raw_tables["application"])
 
-    # Every other raw table is Home Credit's full history for every
-    # applicant it's ever seen, not just this batch (bureau.csv/
-    # previous_application.csv/installments_payments.csv/
-    # credit_card_balance.csv are multi-million row files) -- filter each to
-    # this batch's SK_ID_CURR values before aggregating, or feature
-    # engineering burns time/memory on IDs the merge in merge_feature_frames
-    # would drop anyway. Taken from the raw application table (still its
-    # original int64 dtype), not app_df, since app_df's SK_ID_CURR has
-    # already been cast to string.
+    # The history tables cover everyone Home Credit has ever seen, so each
+    # feature function first cuts its table down to the applicants being
+    # scored. Taken from the raw application table, where SK_ID_CURR is still
+    # a number (app_df has already turned it into text).
     valid_ids = set(raw_tables["application"]["SK_ID_CURR"])
 
     feature_frames: dict[str, pd.DataFrame] = {}

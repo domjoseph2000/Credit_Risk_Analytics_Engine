@@ -12,3 +12,4 @@ src/Variable-Selection/test
 /.continue
 /.claude
 *.pdf
+.pytest_cache/

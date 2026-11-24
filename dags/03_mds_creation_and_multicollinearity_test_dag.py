@@ -1,22 +1,28 @@
 """
-Home Credit – MDS Creation & Multicollinearity Test DAG
-=========================================
-Orchestrates model dataset (MDS) creation followed by VIF-based
-multicollinearity reduction, then triggers the model pipeline
-(04_model_pipeline: tuning -> training -> segmentation) for LightGBM_v1.
+Home Credit – 03 MDS Creation & Multicollinearity DAG
+=====================================================
+Step 3 of the training pipeline: builds the single table the models are
+trained on (the "model dataset", MDS), removes features that mostly repeat
+each other, then starts model training.
 
-**Pipeline**
-1. `create_mds` — runs `model_dataset_creation.ipynb`, joining every staged
-   parquet into `model_dataset_initial.parquet`.
-2. `multicollinearity_reduction` — runs `01b_multicollinearity_reduction.ipynb`,
-   which iteratively drops the highest-VIF feature (protecting features with
-   strong predictive scores from `02_variable_selection`'s output) and writes
-   the reduced `model_dataset_final.parquet` that hyperparameter tuning and
-   training consume. This step used to be a manual, undocumented step run
-   outside any DAG — it's now wired in so the full pipeline runs end-to-end.
-3. Triggers `04_model_pipeline` for LightGBM_v1 -- with a full hyperparameter
-   search if the `run_hyperopt` toggle is on, otherwise with tuning='previous'
-   (saved hyperparameters, feature list refreshed for the new dataset).
+Tasks
+-----
+1. `create_mds` — runs 03_MDS-Creation/model_dataset_creation.ipynb. Joins
+   every processed parquet from Step 1 into one row per applicant
+   (SK_ID_CURR) and saves it as model_dataset_initial.parquet.
+2. `multicollinearity_reduction` — runs
+   02_Variable-Selection/01b_multicollinearity_reduction.ipynb. Repeatedly
+   drops the feature with the highest VIF (the one best explained by the
+   others), but protects features that scored well in Step 2. Saves the
+   result as model_dataset_final.parquet, which tuning and training read.
+3. Starts 04_model_pipeline for LightGBM_v1, the version that uses every
+   feature in the new dataset (later versions pick their features from it):
+   - `run_hyperopt` on  -> a full hyperparameter search ('search', hours)
+   - `run_hyperopt` off -> reuse the saved hyperparameters and just refresh
+     the feature list for the new dataset ('previous', minutes). Default.
+
+The other model versions aren't retrained automatically; run them yourself
+in 04_model_pipeline afterwards.
 """
 from datetime import datetime, timedelta
 import os
@@ -29,10 +35,11 @@ from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 import papermill as pm
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-# 1. Define your Root Environment Variables
+# Inside the container: data/ is mounted at /data and src/ at /src.
 DATA_ROOT   = os.environ.get("HOMECREDIT_DATA_ROOT", "/data")
 SRC_DIR     = os.environ.get("HOMECREDIT_SRC_DIR",   "/src")
 
+# Settings shared by every task: one retry after 5 minutes, no emails
 DEFAULT_ARGS = {
     "owner"           : "Admin",
     "depends_on_past" : False,
@@ -42,6 +49,7 @@ DEFAULT_ARGS = {
     "email_on_retry"  : False,
 }
 
+# Options shown on the "Trigger DAG" screen in the Airflow UI
 UI_PARAMS = {
         "run_hyperopt": Param(
             default=False,
@@ -52,24 +60,26 @@ UI_PARAMS = {
     )
 }
 
-# Notebook filename map: task_id -> (subfolder under SRC_DIR/Training, notebook filename)
+# Which notebook each task runs: task id -> (folder under src/Training, notebook file)
 NOTEBOOKS = {
     "create_mds"                  : ("03_MDS-Creation", "model_dataset_creation.ipynb"),
     "multicollinearity_reduction" : ("02_Variable-Selection", "01b_multicollinearity_reduction.ipynb"),
 }
 
-# ── Papermill runner ──────────────────────────────────────────────────────────
+# ── Notebook runner ───────────────────────────────────────────────────────────
 def run_notebook(task_id: str, **context) -> None:
     """
-    Execute a notebook dynamically, looked up from NOTEBOOKS by task_id.
-    Reused across MDS creation and multicollinearity reduction since both are
-    single fixed notebooks that self-configure from env vars.
+    Run the notebook listed for `task_id` in NOTEBOOKS with papermill.
+
+    Both notebooks find their own input/output folders from environment
+    variables, so no parameters are passed. The executed copy is saved as
+    notebook_outputs/<task>__<run date>.ipynb.
     """
     subfolder, nb_name = NOTEBOOKS[task_id]
     current_nb_dir  = os.path.join(SRC_DIR, "Training", subfolder)
     current_out_dir = os.path.join(DATA_ROOT, "Model-Training", "notebook_outputs")
 
-    # Ensure the output folder exists before writing to prevent OS errors
+    # Make sure the output folder exists before papermill writes to it
     os.makedirs(current_out_dir, exist_ok=True)
 
     input_nb   = os.path.join(current_nb_dir, nb_name)
@@ -83,27 +93,27 @@ def run_notebook(task_id: str, **context) -> None:
         input_path=input_nb,
         output_path=output_nb,
         kernel_name="python3",
-        parameters={},          # notebooks read paths from env vars
+        parameters={},          # none needed -- the notebooks read their paths from env vars
         progress_bar=False,
-        request_save_on_cell_execute=True,
+        request_save_on_cell_execute=True,  # save after every cell, so a failed run still shows how far it got
     )
     print(f"[{task_id}] ✓ Complete")
 
 
-# ── DAG Definition ────────────────────────────────────────────────────────────
+# ── DAG definition ────────────────────────────────────────────────────────────
 with DAG(
     dag_id="03_mds_creation_and_multicollinearity_test",
     description="MDS creation + VIF-based multicollinearity reduction, then branch to tuning/training",
     default_args=DEFAULT_ARGS,
-    # CRITICAL: Even with schedule_interval=None, Airflow requires a start_date.
+    # Airflow requires a start date even for a DAG with no schedule
     start_date=datetime(2024, 1, 1),
     params=UI_PARAMS,
-    schedule=None, # Triggered by the Variable Selection DAG
+    schedule=None, # started by 02_variable_selection, or manually
     max_active_runs=1,
     catchup=False
 ) as dag:
 
-    # 1. MDS creation task
+    # 1. Build the model dataset (doc_md is the task description in the Airflow UI)
     task_create_mds = PythonOperator(
         task_id="create_mds",
         python_callable=run_notebook,
@@ -115,7 +125,7 @@ with DAG(
         """,
     )
 
-    # 2. Multicollinearity reduction task
+    # 2. Remove features that largely duplicate others
     task_multicollinearity_reduction = PythonOperator(
         task_id="multicollinearity_reduction",
         python_callable=run_notebook,
@@ -130,8 +140,9 @@ with DAG(
         """,
     )
 
-    # 3. The Branching Logic -- both paths run the full model pipeline for LightGBM_v1
-    # (tuning -> training -> segmentation); they differ only in the tuning mode
+    # 3. Choose how to train LightGBM_v1 on the new dataset. Both options run
+    # the full model pipeline (tuning -> training -> segmentation); they only
+    # differ in the tuning mode. Returns the id of the trigger task to run.
     @task.branch
     def choose_path(**context):
         if context["params"]["run_hyperopt"]:
@@ -141,7 +152,7 @@ with DAG(
 
     branch_task = choose_path()
 
-    # 4. Path A: full hyperparameter search, then train
+    # 4a. Full hyperparameter search, then train (doesn't wait for 04 to finish)
     trigger_tuning_pipeline = TriggerDagRunOperator(
         task_id="trigger_pipeline_search",
         trigger_dag_id="04_model_pipeline",
@@ -149,12 +160,12 @@ with DAG(
         wait_for_completion=False,
     )
 
-    # 5. Path B: reuse saved hyperparameters (refreshing the feature list), then train
+    # 4b. Reuse the saved hyperparameters (refreshing the feature list), then train
     trigger_training_pipeline = TriggerDagRunOperator(
         task_id="trigger_pipeline_previous",
         trigger_dag_id="04_model_pipeline",
         conf={"model_folder": "LightGBM_v1", "tuning": "previous"},
     )
 
-    # Dependencies
+    # Task order
     task_create_mds >> task_multicollinearity_reduction >> branch_task >> [trigger_tuning_pipeline, trigger_training_pipeline]

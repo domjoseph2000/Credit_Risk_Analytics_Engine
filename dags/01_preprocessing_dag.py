@@ -1,12 +1,19 @@
 """
-Home Credit – Preprocessing Pipeline DAG
-=========================================
-Orchestrates the full feature-engineering pipeline for the Home Credit
-default-prediction project. Each task executes one Jupyter notebook via
-papermill and writes its output to /data/Model-Training/Staging/.
+Home Credit – 01 Preprocessing DAG
+==================================
+Step 1 of the training pipeline: turns the raw Kaggle CSVs into one cleaned,
+feature-engineered parquet per source table.
 
-Dependency graph
-----------------
+What it does
+------------
+Each task runs one notebook from src/Training/01_Preprocess/ with papermill.
+The notebooks read the raw CSVs from /data/Input and write their results to
+/data/Model-Training/Staging/. A copy of every executed notebook (with its
+printed output) is saved to /data/Model-Training/notebook_outputs/ so you can
+see what happened in each run.
+
+Task order
+----------
 
     application_train.csv ──► task_application    ──┐
                                                     │
@@ -17,21 +24,23 @@ Dependency graph
     bureau.csv               ► task_bureau  ───────────────┐
     bureau_balance.csv   ────┘                             │
                                                            ▼
-    (all above) ─────────────────────────────────────► branch_task
+    (all of the above) ──────────────────────────────► branch_task
                                                            │
                                     trigger_variable_selection param
                                            ┌───────true───────┐false
                                            ▼                   ▼
                               trigger_variable_selection   skip_variable_selection
-                              (runs 02_variable_selection)
+                              (starts 02_variable_selection)
 
-Parallel execution
-------------------
-Stage 1  (no deps)  : task_application, task_prevloans, task_bureau
-Stage 2  (needs prevloans) : task_pos, task_creditcard, task_installments
-Stage 3  (needs all)      : branch on `trigger_variable_selection` param,
-                             which by default triggers the `02_variable_selection`
-                             DAG (was `task_select_vars` in this DAG).
+- task_application, task_prevloans and task_bureau don't depend on anything.
+- task_pos, task_creditcard and task_installments need task_prevloans first,
+  because they reuse its cleaned previous-loan table.
+- Once everything has succeeded, the DAG starts 02_variable_selection, unless
+  you set the `trigger_variable_selection` param to false.
+
+The graph allows independent tasks to run side by side, but docker-compose
+limits Airflow to one task at a time (AIRFLOW__CORE__PARALLELISM=1), so in
+practice they run one after another.
 """
 
 from __future__ import annotations
@@ -50,23 +59,23 @@ from airflow.utils.trigger_rule import TriggerRule
 import papermill as pm
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-# 1. Define your Root Environment Variables
+# Inside the container these default to the folders docker-compose mounts:
+# your project's data/ folder at /data and src/ at /src.
 DATA_ROOT   = os.environ.get("HOMECREDIT_DATA_ROOT", "/data")
 SRC_DIR     = os.environ.get("HOMECREDIT_SRC_DIR",   "/src")
 
-# 2. Build your nested paths dynamically
-NB_DIR      = os.path.join(SRC_DIR, "Training", "01_Preprocess")
+NB_DIR      = os.path.join(SRC_DIR, "Training", "01_Preprocess")           # notebooks to run
 
-OUTPUT_DIR  = os.path.join(DATA_ROOT, "Model-Training", "Staging")
-NB_OUT_DIR  = os.path.join(DATA_ROOT, "Model-Training", "notebook_outputs")
+OUTPUT_DIR  = os.path.join(DATA_ROOT, "Model-Training", "Staging")         # processed parquets
+NB_OUT_DIR  = os.path.join(DATA_ROOT, "Model-Training", "notebook_outputs")  # executed notebook copies
 
- # Create the output folders
+# Make sure the output folders exist before any task writes to them
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(NB_OUT_DIR, exist_ok=True)
 #os.makedirs(NB_DIR, exist_ok=True)
 
 
-# Notebook filename map
+# Which notebook each task runs (task name -> notebook file in NB_DIR)
 NOTEBOOKS = {
     "application"   : "Application_data.ipynb",
     "prevloans"     : "Prevloans_data.ipynb",
@@ -76,7 +85,8 @@ NOTEBOOKS = {
     "bureau"        : "Bureau_data.ipynb",
 }
 
-# ── Default args ──────────────────────────────────────────────────────────────
+# ── Settings shared by every task ─────────────────────────────────────────────
+# One automatic retry after 5 minutes; no emails.
 DEFAULT_ARGS = {
     "owner"           : "Admin",
     "depends_on_past" : False,
@@ -86,6 +96,7 @@ DEFAULT_ARGS = {
     "email_on_retry"  : False,
 }
 
+# Options shown on the "Trigger DAG" screen in the Airflow UI
 UI_PARAMS = {
     "trigger_variable_selection": Param(
         default=True,
@@ -96,14 +107,16 @@ UI_PARAMS = {
     )
 }
 
-# ── Papermill runner ──────────────────────────────────────────────────────────
+# ── Notebook runner ───────────────────────────────────────────────────────────
 def run_notebook(task_id: str, **context) -> None:
     """
-    Execute a notebook with papermill.
+    Run one preprocessing notebook with papermill.
 
-    The notebook is expected to self-configure from environment variables
-    set inside the Docker container:  HOMECREDIT_DATA_ROOT  – project root that replaces hard-coded path 'a:\\Dominic\\My Projects\\Home Credit'
-    Executed notebooks are saved to NB_OUT_DIR for auditing / debugging.
+    No parameters are passed in: each notebook finds its input and output
+    folders itself from the HOMECREDIT_DATA_ROOT environment variable (set
+    to /data in the container; on your PC it defaults to the project's
+    data/ folder). The executed copy is saved as
+    notebook_outputs/<task>__<run date>.ipynb.
     """
     nb_name = NOTEBOOKS[task_id]
 
@@ -118,9 +131,9 @@ def run_notebook(task_id: str, **context) -> None:
         input_path=input_nb,
         output_path=output_nb,
         kernel_name="python3",
-        parameters={},          # notebooks read paths from env vars
+        parameters={},          # none needed -- the notebook reads its paths from env vars
         progress_bar=False,
-        request_save_on_cell_execute=True,
+        request_save_on_cell_execute=True,  # save after every cell, so a failed run still shows how far it got
     )
     print(f"[{task_id}] ✓ Complete")
 
@@ -131,14 +144,15 @@ with DAG(
     description="Home Credit feature engineering pipeline",
     default_args=DEFAULT_ARGS,
     start_date=datetime(2024, 1, 1),
-    schedule=None,          # triggered manually or by upstream event
+    schedule=None,          # no schedule: start it manually from the UI or CLI
     params=UI_PARAMS,
     catchup=False,
-    max_active_runs=1,
+    max_active_runs=1,      # never two preprocessing runs at once
     tags=["homecredit", "preprocessing", "feature-engineering"],
 ) as dag:
 
-    # ── Stage 1: independent tasks (run in parallel) ──────────────────────────
+    # ── Tables with no dependencies ───────────────────────────────────────────
+    # (doc_md is the description shown for each task in the Airflow UI)
 
     task_application = PythonOperator(
         task_id="task_application",
@@ -181,7 +195,7 @@ with DAG(
         """,
     )
 
-    # ── Stage 2: depend on task_prevloans (run in parallel with each other) ───
+    # ── Tables that need task_prevloans first ─────────────────────────────────
 
     task_pos = PythonOperator(
         task_id="task_pos",
@@ -222,7 +236,9 @@ with DAG(
         """,
     )
 
-    # ── Stage 3: branch on whether to trigger variable selection ─────────────
+    # ── Decide whether to start variable selection ────────────────────────────
+    # Runs only if every table above succeeded (ALL_SUCCESS); returns the id
+    # of the task to run next, and Airflow skips the other one.
 
     @task.branch(trigger_rule=TriggerRule.ALL_SUCCESS)
     def choose_path(**context):
@@ -232,29 +248,31 @@ with DAG(
 
     branch_task = choose_path()
 
+    # Starts the 02_variable_selection DAG and finishes straight away,
+    # without waiting for that DAG to complete
     trigger_variable_selection = TriggerDagRunOperator(
         task_id="trigger_variable_selection",
         trigger_dag_id="02_variable_selection",
         wait_for_completion=False,
     )
 
+    # Does nothing -- just marks "stopped after preprocessing" in the graph
     skip_variable_selection = EmptyOperator(task_id="skip_variable_selection")
 
-    # ── Wire up dependencies ──────────────────────────────────────────────────
+    # ── Task order ────────────────────────────────────────────────────────────
     #
-    #  Stage 1 (parallel)         Stage 2 (parallel)        Stage 3
-    #  ──────────────────         ──────────────────        ───────
     #  task_application ──────────────────────────────────► branch_task
     #  task_prevloans   ──► task_pos           ───────────► branch_task
     #                   └──► task_creditcard   ───────────► branch_task
     #                   └──► task_installments ───────────► branch_task
     #  task_bureau ───────────────────────────────────────► branch_task
     #  branch_task ──► trigger_variable_selection | skip_variable_selection
-    # 1. Independent tables run straight to the branch
+
+    # Tables with no dependencies go straight to the branch
     [task_application, task_bureau] >> branch_task
 
-    # 2. Dependent tables run through their sequence
+    # The three tables that reuse task_prevloans' output run after it
     task_prevloans >> [task_pos, task_creditcard, task_installments] >> branch_task
 
-    # 3. Branch to either trigger or skip variable selection
+    # Then either start variable selection or stop
     branch_task >> [trigger_variable_selection, skip_variable_selection]

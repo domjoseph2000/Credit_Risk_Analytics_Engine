@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Home Credit — Real-Time Scoring</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #F3ECDD;
+    --panel: #FBF7EE;
+    --ink: #2A2520;
+    --muted: #6E655A;
+    --faint: #E6DDCB;
+    --orange: #D4622A;
+    --mustard: #E3A72F;
+    --teal: #2F7A6B;
+    --olive: #8E9A3A;
+    --red: #B5432F;
+    --lcd-bg: #231F1B;
+    --lcd: #F2B33D;
+    --mono: "IBM Plex Mono", ui-monospace, Consolas, "Courier New", monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    font-family: var(--mono);
+    font-size: 14px;
+    line-height: 1.5;
+    background: var(--paper);
+    color: var(--ink);
+  }
+
+  /* ── Header ─────────────────────────────────────────────── */
+  .stripes { height: 10px; display: flex; }
+  .stripes span { flex: 1; }
+  .stripes span:nth-child(1) { background: var(--red); }
+  .stripes span:nth-child(2) { background: var(--orange); }
+  .stripes span:nth-child(3) { background: var(--mustard); }
+  .stripes span:nth-child(4) { background: var(--teal); }
+  header {
+    display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap;
+    max-width: 1240px; margin: 0 auto; padding: 22px 24px 18px;
+    border-bottom: 2px solid var(--ink);
+  }
+  .brand small { display: block; font-size: 11px; letter-spacing: .18em; color: var(--muted); text-transform: uppercase; }
+  .brand h1 { margin: 2px 0 0; font-size: 26px; font-weight: 700; letter-spacing: .02em; }
+  .status { display: flex; gap: 18px; font-size: 12px; color: var(--muted); align-items: center; flex-wrap: wrap; }
+  .lamp { display: inline-flex; align-items: center; gap: 7px; text-transform: uppercase; letter-spacing: .08em; }
+  .lamp i { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--ink); background: var(--faint); }
+  .lamp.on i { background: var(--teal); }
+  .lamp.off i { background: var(--red); }
+
+  /* ── Layout & panels ────────────────────────────────────── */
+  .layout {
+    max-width: 1240px; margin: 0 auto; padding: 24px;
+    display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 24px; align-items: start;
+  }
+  @media (max-width: 980px) { .layout { grid-template-columns: 1fr; } }
+  .panel {
+    background: var(--panel);
+    border: 2px solid var(--ink);
+    box-shadow: 5px 5px 0 var(--ink);
+  }
+  .panel-head {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 16px; border-bottom: 2px solid var(--ink);
+    font-size: 12px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase;
+  }
+  .panel-head span:last-child { font-weight: 400; color: var(--muted); letter-spacing: .06em; }
+  .panel-body { padding: 18px 16px 20px; }
+  .result-panel { position: sticky; top: 16px; }
+
+  /* ── Example presets ────────────────────────────────────── */
+  .presets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 22px; }
+  @media (max-width: 560px) { .presets { grid-template-columns: 1fr; } }
+  .preset {
+    font: inherit; text-align: left; cursor: pointer; display: flex; flex-direction: column; justify-content: flex-start; gap: 2px;
+    background: var(--paper); color: var(--ink);
+    border: 2px solid var(--ink); box-shadow: 3px 3px 0 var(--ink);
+    padding: 8px 10px; transition: transform .08s, box-shadow .08s;
+  }
+  .preset:hover { background: #fff; }
+  .preset:active { transform: translate(3px, 3px); box-shadow: 0 0 0 var(--ink); }
+  .preset b { display: block; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+  .preset span { font-size: 12px; color: var(--muted); }
+  .preset .chip { display: inline-block; width: 9px; height: 9px; margin-right: 6px; border: 1.5px solid var(--ink); vertical-align: 0; }
+
+  /* ── Form ───────────────────────────────────────────────── */
+  fieldset { border: 0; margin: 0 0 22px; padding: 0; min-width: 0; }
+  legend {
+    width: 100%; padding: 0 0 6px; margin-bottom: 14px;
+    border-bottom: 1.5px dashed var(--ink);
+    font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase;
+  }
+  legend .num { display: inline-block; background: var(--ink); color: var(--panel); padding: 0 6px; margin-right: 8px; }
+  .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 16px; }
+  .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  @media (max-width: 560px) { .grid, .grid.three { grid-template-columns: 1fr; } }
+  .span-2 { grid-column: 1 / -1; }
+  .field > label { display: block; font-size: 12.5px; font-weight: 500; margin-bottom: 6px; line-height: 1.35; }
+  .field > label code, .field > label .tag { display: block; width: max-content; max-width: 100%; margin-top: 2px; }
+  .field > label code { font-family: inherit; font-weight: 400; color: var(--muted); font-size: 10.5px; overflow-wrap: anywhere; }
+  .tag {
+    font-size: 9.5px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase; line-height: 1.5;
+    border: 1px solid var(--muted); color: var(--muted); padding: 0 5px; white-space: nowrap;
+  }
+  input[type="number"], input[type="date"], select {
+    width: 100%; font: inherit; font-size: 14px; color: var(--ink);
+    background: #fff; border: 1.5px solid var(--ink); border-radius: 0;
+    padding: 7px 9px; height: 38px;
+  }
+  select { appearance: none; padding-right: 28px;
+    background-image: linear-gradient(45deg, transparent 50%, var(--ink) 50%), linear-gradient(135deg, var(--ink) 50%, transparent 50%);
+    background-position: calc(100% - 15px) 16px, calc(100% - 10px) 16px; background-size: 5px 5px; background-repeat: no-repeat; }
+  input:focus, select:focus, button:focus-visible { outline: 3px solid var(--mustard); outline-offset: 1px; }
+  input:disabled { background: var(--faint); color: var(--muted); }
+  .hint { font-size: 11.5px; color: var(--muted); margin-top: 5px; }
+  .field > label.check { display: flex; align-items: center; gap: 8px; margin: 7px 0 0; font-size: 12px; font-weight: 400; cursor: pointer; }
+  .check input { width: 15px; height: 15px; accent-color: var(--ink); margin: 0; }
+  .meter { height: 6px; margin-top: 6px; border: 1.5px solid var(--ink); background: #fff; }
+  .meter i { display: block; height: 100%; width: 0; background: var(--teal); transition: width .2s; }
+
+  .submit {
+    width: 100%; font: inherit; font-size: 15px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase;
+    cursor: pointer; color: var(--panel); background: var(--orange);
+    border: 2px solid var(--ink); box-shadow: 4px 4px 0 var(--ink); padding: 13px;
+    transition: transform .08s, box-shadow .08s;
+  }
+  .submit:hover { background: #c4561f; }
+  .submit:active { transform: translate(4px, 4px); box-shadow: 0 0 0 var(--ink); }
+  .submit:disabled { background: var(--muted); cursor: default; transform: none; box-shadow: 4px 4px 0 var(--ink); }
+
+  /* ── Result ─────────────────────────────────────────────── */
+  .idle { text-align: center; padding: 40px 10px 34px; color: var(--muted); }
+  .idle .big { font-size: 20px; font-weight: 700; color: var(--ink); letter-spacing: .12em; }
+  .cursor { display: inline-block; width: 11px; height: 20px; background: var(--ink); vertical-align: -3px; margin-left: 4px; animation: blink 1.1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .cursor { animation: none; } }
+
+  .error {
+    display: none; margin-bottom: 16px; padding: 10px 12px;
+    border: 2px solid var(--red); background: #F7E4DC; color: var(--red);
+    font-size: 12.5px; white-space: pre-wrap;
+  }
+  .error b { display: block; letter-spacing: .12em; margin-bottom: 4px; }
+
+  .dial { display: block; width: 100%; max-width: 380px; margin: 0 auto; }
+  #needle { transform-box: view-box; transform-origin: 160px 168px; transform: rotate(-90deg);
+    transition: transform 1.1s cubic-bezier(.3, 1.35, .5, 1); }
+  @media (prefers-reduced-motion: reduce) { #needle { transition: none; } }
+
+  .readout { display: grid; grid-template-columns: 1.15fr 1fr; gap: 12px; margin: 8px 0 22px; }
+  @media (max-width: 460px) { .readout { grid-template-columns: 1fr; } }
+  .lcd {
+    background: var(--lcd-bg); color: var(--lcd); border: 2px solid var(--ink);
+    padding: 10px 14px 8px; display: flex; flex-direction: column; justify-content: center;
+  }
+  .lcd small { font-size: 10.5px; letter-spacing: .2em; color: #B89A63; text-transform: uppercase; }
+  .lcd .score { font-size: 46px; font-weight: 700; line-height: 1.05; letter-spacing: .04em; text-shadow: 0 0 10px rgba(242, 179, 61, .35); }
+  .lcd .pd { font-size: 13px; color: #E9D9B4; }
+  .band {
+    border: 2px solid var(--ink); display: flex; align-items: center; gap: 12px; padding: 10px 12px; color: var(--panel);
+  }
+  .band .letter { font-size: 44px; font-weight: 700; line-height: 1; width: 50px; height: 56px; display: grid; place-items: center;
+    background: var(--panel); color: var(--ink); border: 2px solid var(--ink); }
+  .band small { display: block; font-size: 10.5px; letter-spacing: .2em; text-transform: uppercase; opacity: .85; }
+  .band .label { font-size: 15px; font-weight: 700; line-height: 1.25; }
+
+  .section-title { font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase;
+    border-bottom: 1.5px dashed var(--ink); padding-bottom: 6px; margin: 0 0 14px; display: flex; justify-content: space-between; }
+  .section-title span:last-child { font-weight: 400; letter-spacing: .04em; text-transform: none; color: var(--muted); }
+  .rc { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; margin-bottom: 12px; }
+  .rc-name { font-size: 12px; overflow-wrap: anywhere; }
+  .rc-val { font-size: 13px; font-weight: 700; text-align: right; }
+  .rc-bar { grid-column: 1 / -1; position: relative; height: 14px; border: 1.5px solid var(--ink); background: #fff; }
+  .rc-bar .axis { position: absolute; left: 50%; top: -4px; bottom: -4px; border-left: 1.5px solid var(--ink); }
+  .rc-bar .fill { position: absolute; top: 0; bottom: 0; }
+  .pos { background: var(--teal); }
+  .neg { background: var(--red); }
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border: 1.5px solid var(--ink); margin-right: 6px; vertical-align: -1px; }
+
+  .ticket { margin-top: 20px; border: 2px dashed var(--ink); padding: 10px 12px; font-size: 12px; display: flex; gap: 10px; }
+  .ticket b { white-space: nowrap; }
+  .meta { margin-top: 14px; font-size: 11px; color: var(--muted); display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+
+  footer { max-width: 1240px; margin: 0 auto; padding: 0 24px 28px; font-size: 11.5px; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<div class="stripes" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+<header>
+  <div class="brand">
+    <small>Home Credit · Credit risk</small>
+    <h1>Real-time scoring</h1>
+  </div>
+  <div class="status">
+    <span>Model: HomeCredit_Scorecard_Model@prod</span>
+    <span class="lamp" id="lamp"><i></i><span id="lampText">Checking API</span></span>
+  </div>
+</header>
+
+<main class="layout">
+
+  <!-- ── Applicant record ─────────────────────────────────── -->
+  <form class="panel" id="form" novalidate>
+    <div class="panel-head"><span>Applicant record</span><span>POST /score</span></div>
+    <div class="panel-body">
+
+      <div class="presets" role="group" aria-label="Load an example applicant">
+        <button type="button" class="preset" data-preset="existing">
+          <b><i class="chip" style="background:var(--red)"></i>Existing</b><span>ID 100002</span>
+        </button>
+        <button type="button" class="preset" data-preset="new">
+          <b><i class="chip" style="background:var(--mustard)"></i>New</b><span>No history</span>
+        </button>
+        <button type="button" class="preset" data-preset="lowRisk">
+          <b><i class="chip" style="background:var(--teal)"></i>Low risk</b><span>ID 442250</span>
+        </button>
+      </div>
+
+      <fieldset>
+        <legend><span class="num">01</span>Applicant</legend>
+        <div class="grid">
+          <div class="field span-2">
+            <label for="SK_ID_CURR">Applicant ID <code>SK_ID_CURR</code></label>
+            <input type="number" id="SK_ID_CURR" required>
+            <div class="hint">An ID with credit history on file gets its real history features. Any other ID scores as a new applicant with blank history.</div>
+          </div>
+          <div class="field">
+            <label for="AGE_YEARS">Age, years <code>DAYS_BIRTH</code></label>
+            <input type="number" id="AGE_YEARS" step="any" min="18" max="100" required>
+          </div>
+          <div class="field">
+            <label for="EMPLOYED_YEARS">Years employed <code>DAYS_EMPLOYED</code></label>
+            <input type="number" id="EMPLOYED_YEARS" step="any" min="0">
+            <label class="check"><input type="checkbox" id="NOT_EMPLOYED">Not employed / retired</label>
+          </div>
+          <div class="field">
+            <label for="ID_PUBLISH_DATE">ID document issued <code>DAYS_ID_PUBLISH</code></label>
+            <input type="date" id="ID_PUBLISH_DATE">
+          </div>
+          <div class="field">
+            <label for="PHONE_CHANGE_YEARS">Years since phone change <code>DAYS_LAST_PHONE_CHANGE</code></label>
+            <input type="number" id="PHONE_CHANGE_YEARS" step="any" min="0">
+          </div>
+          <div class="field">
+            <label for="CODE_GENDER">Gender <span class="tag" title="Accepted by the API but not used by the model">info only</span></label>
+            <select id="CODE_GENDER"><option value="">—</option><option>F</option><option>M</option></select>
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend><span class="num">02</span>Loan</legend>
+        <div class="grid">
+          <div class="field">
+            <label for="AMT_CREDIT">Loan amount <code>AMT_CREDIT</code></label>
+            <input type="number" id="AMT_CREDIT" step="any" min="0" required>
+          </div>
+          <div class="field">
+            <label for="AMT_GOODS_PRICE">Goods price <code>AMT_GOODS_PRICE</code></label>
+            <input type="number" id="AMT_GOODS_PRICE" step="any" min="0">
+          </div>
+          <div class="field">
+            <label for="AMT_INCOME_TOTAL">Annual income <span class="tag" title="Required by the API but not used by the model">info only</span></label>
+            <input type="number" id="AMT_INCOME_TOTAL" step="any" min="0" required>
+          </div>
+          <div class="field">
+            <label for="AMT_ANNUITY">Loan annuity <span class="tag" title="Accepted by the API but not used by the model">info only</span></label>
+            <input type="number" id="AMT_ANNUITY" step="any" min="0">
+          </div>
+          <div class="field">
+            <label for="NAME_CONTRACT_TYPE">Contract type <span class="tag" title="Accepted by the API but not used by the model">info only</span></label>
+            <select id="NAME_CONTRACT_TYPE"><option value="">—</option><option>Cash loans</option><option>Revolving loans</option></select>
+          </div>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend><span class="num">03</span>External credit scores</legend>
+        <div class="grid three">
+          <div class="field">
+            <label for="EXT_SOURCE_1">Score 1 <code>EXT_1</code></label>
+            <input type="number" id="EXT_SOURCE_1" step="any" min="0" max="1" data-meter="m1">
+            <div class="meter" aria-hidden="true"><i id="m1"></i></div>
+          </div>
+          <div class="field">
+            <label for="EXT_SOURCE_2">Score 2 <code>EXT_2</code></label>
+            <input type="number" id="EXT_SOURCE_2" step="any" min="0" max="1" data-meter="m2">
+            <div class="meter" aria-hidden="true"><i id="m2"></i></div>
+          </div>
+          <div class="field">
+            <label for="EXT_SOURCE_3">Score 3 <code>EXT_3</code></label>
+            <input type="number" id="EXT_SOURCE_3" step="any" min="0" max="1" data-meter="m3">
+            <div class="meter" aria-hidden="true"><i id="m3"></i></div>
+          </div>
+        </div>
+        <div class="hint">From 0 to 1, higher = safer. Leave blank if unknown. These are the model's strongest signals.</div>
+      </fieldset>
+
+      <fieldset>
+        <legend><span class="num">04</span>Work &amp; home</legend>
+        <div class="grid">
+          <div class="field">
+            <label for="OCCUPATION_TYPE">Occupation</label>
+            <select id="OCCUPATION_TYPE"></select>
+          </div>
+          <div class="field">
+            <label for="ORGANIZATION_TYPE">Organisation</label>
+            <select id="ORGANIZATION_TYPE"></select>
+          </div>
+          <div class="field">
+            <label for="OWN_CAR_AGE">Car age, years <code>OWN_CAR_AGE</code></label>
+            <input type="number" id="OWN_CAR_AGE" step="any" min="0" placeholder="blank = no car">
+          </div>
+          <div class="field">
+            <label for="FLOORSMAX_MEDI">Building floors, 0–1 <code>FLOORSMAX_MEDI</code></label>
+            <input type="number" id="FLOORSMAX_MEDI" step="any" min="0" max="1">
+          </div>
+        </div>
+      </fieldset>
+
+      <div class="error" id="error" role="alert"></div>
+      <button type="submit" class="submit" id="submitBtn">▶ Score applicant</button>
+    </div>
+  </form>
+
+  <!-- ── Result ───────────────────────────────────────────── -->
+  <section class="panel result-panel" aria-live="polite">
+    <div class="panel-head"><span>Result</span><span id="resultMeta">—</span></div>
+    <div class="panel-body">
+      <div class="idle" id="idle">
+        <div class="big">AWAITING INPUT<span class="cursor"></span></div>
+        <p>Load an example above or fill in the record,<br>then press <b>Score applicant</b>.</p>
+      </div>
+
+      <div id="results" hidden>
+        <svg class="dial" viewBox="0 0 320 196" role="img" aria-label="Credit score dial from 300 to 850">
+          <g id="dialBands"></g>
+          <g id="dialTicks"></g>
+          <g id="needle">
+            <polygon points="156,168 164,168 160,52" fill="#2A2520"></polygon>
+          </g>
+          <circle cx="160" cy="168" r="10" fill="#2A2520"></circle>
+          <circle cx="160" cy="168" r="3.5" fill="#F2B33D"></circle>
+          <text x="160" y="192" text-anchor="middle" font-size="10" letter-spacing="2" fill="#6E655A" font-family="IBM Plex Mono, monospace">CREDIT SCORE</text>
+        </svg>
+
+        <div class="readout">
+          <div class="lcd">
+            <small>Score · 300–850</small>
+            <div class="score" id="scoreValue">---</div>
+            <div class="pd">Probability of default <b id="pdValue">—</b></div>
+          </div>
+          <div class="band" id="bandBox">
+            <div class="letter" id="bandLetter">–</div>
+            <div><small>Risk band</small><div class="label" id="bandLabel">—</div></div>
+          </div>
+        </div>
+
+        <div class="section-title"><span>Top reason codes</span><span>points vs an average applicant</span></div>
+        <div id="bars"></div>
+        <div class="legend">
+          <span><i class="pos"></i>raises the score (lower risk)</span>
+          <span><i class="neg"></i>lowers the score (higher risk)</span>
+        </div>
+
+        <div class="ticket" id="ticket"></div>
+        <div class="meta"><span id="metaId"></span><span id="metaTime"></span></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>Scores use the @prod model from MLflow. Restart the API after promoting a new model.</footer>
+
+<script>
+const OCCUPATIONS = ["Accountants","Cleaning staff","Cooking staff","Core staff","Drivers","HR staff","High skill tech staff","IT staff","Laborers","Low-skill Laborers","Managers","Medicine staff","Private service staff","Realty agents","Sales staff","Secretaries","Security staff","Waiters/barmen staff"];
+const ORGANIZATIONS = ["Advertising","Agriculture","Bank","Business Entity Type 1","Business Entity Type 2","Business Entity Type 3","Cleaning","Construction","Culture","Electricity","Emergency","Government","Hotel","Housing","Industry: type 1","Industry: type 10","Industry: type 11","Industry: type 12","Industry: type 13","Industry: type 2","Industry: type 3","Industry: type 4","Industry: type 5","Industry: type 6","Industry: type 7","Industry: type 8","Industry: type 9","Insurance","Kindergarten","Legal Services","Medicine","Military","Mobile","Other","Police","Postal","Realtor","Religion","Restaurant","School","Security","Security Ministries","Self-employed","Services","Telecom","Trade: type 1","Trade: type 2","Trade: type 3","Trade: type 4","Trade: type 5","Trade: type 6","Trade: type 7","Transport: type 1","Transport: type 2","Transport: type 3","Transport: type 4","University","XNA"];
+
+const $ = (id) => document.getElementById(id);
+const DAY_MS = 86400000;
+const NOT_EMPLOYED_SENTINEL = 365243;   // the dataset's code for "not employed / retired"
+
+function fillSelect(id, values, selected) {
+  $(id).innerHTML = '<option value="">—</option>' + values.map(v =>
+    `<option value="${v}"${v === selected ? ' selected' : ''}>${v}</option>`).join('');
+}
+fillSelect('OCCUPATION_TYPE', OCCUPATIONS, '');
+fillSelect('ORGANIZATION_TYPE', ORGANIZATIONS, '');
+
+// ── Example applicants, in the API's own units (days are negative = before applying).
+// Real rows: 100002 from application_train.csv, 442250 from the 2026-10-31 batch
+// (its lowest-risk applicant). "new" is 100002's form with an ID that has no history.
+const PRESETS = {
+  existing: {
+    SK_ID_CURR: 100002, DAYS_BIRTH: -9461, DAYS_EMPLOYED: -637, DAYS_ID_PUBLISH: -2120,
+    DAYS_LAST_PHONE_CHANGE: -1134, AMT_CREDIT: 406597.5, AMT_GOODS_PRICE: 351000,
+    AMT_INCOME_TOTAL: 202500, AMT_ANNUITY: 24700.5, OWN_CAR_AGE: null, FLOORSMAX_MEDI: 0.0833,
+    EXT_SOURCE_1: 0.0830369673913225, EXT_SOURCE_2: 0.2629485927471776, EXT_SOURCE_3: 0.1393757800997895,
+    OCCUPATION_TYPE: 'Laborers', ORGANIZATION_TYPE: 'Business Entity Type 3',
+    NAME_CONTRACT_TYPE: 'Cash loans', CODE_GENDER: 'M',
+  },
+  lowRisk: {
+    SK_ID_CURR: 442250, DAYS_BIRTH: -11346, DAYS_EMPLOYED: -3185, DAYS_ID_PUBLISH: -464,
+    DAYS_LAST_PHONE_CHANGE: -1304, AMT_CREDIT: 472500, AMT_GOODS_PRICE: 472500,
+    AMT_INCOME_TOTAL: 171000, AMT_ANNUITY: 26383.5, OWN_CAR_AGE: null, FLOORSMAX_MEDI: null,
+    EXT_SOURCE_1: 0.7320200610732035, EXT_SOURCE_2: 0.7531195628798977, EXT_SOURCE_3: 0.6161216908872079,
+    OCCUPATION_TYPE: 'Core staff', ORGANIZATION_TYPE: 'School',
+    NAME_CONTRACT_TYPE: 'Cash loans', CODE_GENDER: 'F',
+  },
+};
+PRESETS.new = { ...PRESETS.existing, SK_ID_CURR: 999999999 };
+
+// Dates are handled in UTC on both sides so "days before today" round-trips exactly.
+function todayUtc() { const t = new Date(); return Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate()); }
+function daysAgoToDate(days) { return new Date(todayUtc() - days * DAY_MS).toISOString().slice(0, 10); }
+function dateToDaysAgo(dateStr) { return Math.round((todayUtc() - Date.parse(dateStr + 'T00:00:00Z')) / DAY_MS); }
+// 3 decimals of a year is < 0.2 days, so days -> years -> days is exact after rounding
+const daysToYears = (d) => (Math.abs(d) / 365).toFixed(3);
+const setVal = (id, v) => { $(id).value = (v === null || v === undefined) ? '' : v; };
+
+function loadPreset(name) {
+  const p = PRESETS[name];
+  setVal('SK_ID_CURR', p.SK_ID_CURR);
+  setVal('AGE_YEARS', daysToYears(p.DAYS_BIRTH));
+  const notEmployed = p.DAYS_EMPLOYED === NOT_EMPLOYED_SENTINEL;
+  $('NOT_EMPLOYED').checked = notEmployed;
+  setVal('EMPLOYED_YEARS', notEmployed ? '' : daysToYears(p.DAYS_EMPLOYED));
+  $('EMPLOYED_YEARS').disabled = notEmployed;
+  setVal('ID_PUBLISH_DATE', p.DAYS_ID_PUBLISH === null ? '' : daysAgoToDate(-p.DAYS_ID_PUBLISH));
+  setVal('PHONE_CHANGE_YEARS', p.DAYS_LAST_PHONE_CHANGE === null ? '' : daysToYears(p.DAYS_LAST_PHONE_CHANGE));
+  ['AMT_CREDIT','AMT_GOODS_PRICE','AMT_INCOME_TOTAL','AMT_ANNUITY','OWN_CAR_AGE','FLOORSMAX_MEDI',
+   'NAME_CONTRACT_TYPE','CODE_GENDER'].forEach(k => setVal(k, p[k]));
+  // External scores: show 4 decimals, but send the exact value unless the field is edited
+  ['EXT_SOURCE_1','EXT_SOURCE_2','EXT_SOURCE_3'].forEach(k => {
+    const v = p[k];
+    setVal(k, v === null ? null : Number(v.toFixed(4)));
+    if (v === null) delete $(k).dataset.exact; else $(k).dataset.exact = v;
+  });
+  fillSelect('OCCUPATION_TYPE', OCCUPATIONS, p.OCCUPATION_TYPE);
+  fillSelect('ORGANIZATION_TYPE', ORGANIZATIONS, p.ORGANIZATION_TYPE);
+  updateMeters();
+}
+document.querySelectorAll('.preset').forEach(b => b.addEventListener('click', () => loadPreset(b.dataset.preset)));
+
+$('NOT_EMPLOYED').addEventListener('change', (e) => { $('EMPLOYED_YEARS').disabled = e.target.checked; });
+
+function updateMeters() {
+  document.querySelectorAll('[data-meter]').forEach(inp => {
+    const v = Math.min(1, Math.max(0, Number(inp.value) || 0));
+    $(inp.dataset.meter).style.width = (inp.value === '' ? 0 : v * 100) + '%';
+  });
+}
+document.querySelectorAll('[data-meter]').forEach(inp => inp.addEventListener('input', () => {
+  delete inp.dataset.exact;   // the user typed a value: send what they typed
+  updateMeters();
+}));
+
+// ── API status lamp ────────────────────────────────────────
+async function checkHealth() {
+  try {
+    const r = await fetch('/health', { cache: 'no-store' });
+    setLamp(r.ok);
+  } catch { setLamp(false); }
+}
+function setLamp(ok) {
+  $('lamp').className = 'lamp ' + (ok ? 'on' : 'off');
+  $('lampText').textContent = ok ? 'API online' : 'API offline';
+}
+checkHealth();
+setInterval(checkHealth, 30000);
+
+// ── Score dial: utils/config.py's score range (300–850) and band cut-offs (BAND_BINS)
+const DIAL_MIN = 300, DIAL_MAX = 850, CX = 160, CY = 168, R = 126;
+const BANDS = [
+  { letter: 'E', from: 300, to: 560, color: '#B5432F' },
+  { letter: 'D', from: 560, to: 590, color: '#D4622A' },
+  { letter: 'C', from: 590, to: 620, color: '#E3A72F' },
+  { letter: 'B', from: 620, to: 650, color: '#8E9A3A' },
+  { letter: 'A', from: 650, to: 850, color: '#2F7A6B' },
+];
+const BAND_BY_LETTER = Object.fromEntries(BANDS.map(b => [b.letter, b]));
+const angleFor = (s) => -90 + 180 * Math.min(1, Math.max(0, (s - DIAL_MIN) / (DIAL_MAX - DIAL_MIN)));
+const pointAt = (r, a) => { const t = a * Math.PI / 180; return [CX + r * Math.sin(t), CY - r * Math.cos(t)]; };
+
+(function buildDial() {
+  const arc = (r, a0, a1) => { const [x0, y0] = pointAt(r, a0), [x1, y1] = pointAt(r, a1);
+    return `M${x0.toFixed(2)} ${y0.toFixed(2)} A${r} ${r} 0 0 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`; };
+  let bands = `<path d="${arc(R, -90, 90)}" fill="none" stroke="#2A2520" stroke-width="26"/>`;
+  bands += BANDS.map(b => `<path d="${arc(R, angleFor(b.from) + .4, angleFor(b.to) - .4)}" fill="none" stroke="${b.color}" stroke-width="22"/>`).join('');
+  bands += BANDS.map(b => { const [x, y] = pointAt(R, angleFor((b.from + b.to) / 2));
+    return `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="middle" dominant-baseline="central" font-size="11" font-weight="700" fill="#FBF7EE" font-family="IBM Plex Mono, monospace">${b.letter}</text>`; }).join('');
+  $('dialBands').innerHTML = bands;
+
+  let ticks = '';
+  for (let s = 300; s <= 850; s += 25) {
+    const major = s % 100 === 0 || s === 850;
+    const [x0, y0] = pointAt(110, angleFor(s)), [x1, y1] = pointAt(major ? 100 : 105, angleFor(s));
+    ticks += `<line x1="${x0.toFixed(1)}" y1="${y0.toFixed(1)}" x2="${x1.toFixed(1)}" y2="${y1.toFixed(1)}" stroke="#2A2520" stroke-width="${major ? 2 : 1}"/>`;
+    if (s % 100 === 0) { const [lx, ly] = pointAt(88, angleFor(s));
+      ticks += `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" dominant-baseline="central" font-size="10" fill="#6E655A" font-family="IBM Plex Mono, monospace">${s}</text>`; }
+  }
+  $('dialTicks').innerHTML = ticks;
+})();
+
+// ── Submit ─────────────────────────────────────────────────
+const numOrNull = (id) => $(id).value === '' ? null : Number($(id).dataset.exact ?? $(id).value);
+const strOrNull = (id) => $(id).value === '' ? null : $(id).value;
+const yearsToDays = (id) => numOrNull(id) === null ? null : -Math.round(numOrNull(id) * 365);
+
+function buildPayload() {
+  const notEmployed = $('NOT_EMPLOYED').checked;
+  return {
+    SK_ID_CURR: numOrNull('SK_ID_CURR'),
+    DAYS_BIRTH: yearsToDays('AGE_YEARS'),
+    DAYS_EMPLOYED: notEmployed ? NOT_EMPLOYED_SENTINEL : yearsToDays('EMPLOYED_YEARS'),
+    DAYS_ID_PUBLISH: $('ID_PUBLISH_DATE').value ? -dateToDaysAgo($('ID_PUBLISH_DATE').value) : null,
+    DAYS_LAST_PHONE_CHANGE: yearsToDays('PHONE_CHANGE_YEARS'),
+    AMT_CREDIT: numOrNull('AMT_CREDIT'),
+    AMT_GOODS_PRICE: numOrNull('AMT_GOODS_PRICE'),
+    AMT_INCOME_TOTAL: numOrNull('AMT_INCOME_TOTAL'),
+    AMT_ANNUITY: numOrNull('AMT_ANNUITY'),
+    OWN_CAR_AGE: numOrNull('OWN_CAR_AGE'),
+    FLOORSMAX_MEDI: numOrNull('FLOORSMAX_MEDI'),
+    EXT_SOURCE_1: numOrNull('EXT_SOURCE_1'),
+    EXT_SOURCE_2: numOrNull('EXT_SOURCE_2'),
+    EXT_SOURCE_3: numOrNull('EXT_SOURCE_3'),
+    OCCUPATION_TYPE: strOrNull('OCCUPATION_TYPE'),
+    ORGANIZATION_TYPE: strOrNull('ORGANIZATION_TYPE'),
+    NAME_CONTRACT_TYPE: strOrNull('NAME_CONTRACT_TYPE'),
+    CODE_GENDER: strOrNull('CODE_GENDER'),
+  };
+}
+
+function showError(title, detail) {
+  $('error').innerHTML = `<b>${title}</b>`;
+  $('error').appendChild(document.createTextNode(detail));
+  $('error').style.display = 'block';
+}
+
+function formatDetail(detail) {
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) return detail.map(d => `${(d.loc || []).filter(p => p !== 'body').join('.')}: ${d.msg}`).join('\n');
+  return JSON.stringify(detail, null, 2);
+}
+
+$('form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  $('error').style.display = 'none';
+
+  const missing = ['SK_ID_CURR', 'AGE_YEARS', 'AMT_CREDIT', 'AMT_INCOME_TOTAL'].filter(id => $(id).value === '');
+  if (missing.length) {
+    showError('MISSING FIELDS', 'Fill in: ' + missing.map(id => document.querySelector(`label[for="${id}"]`).firstChild.textContent.trim()).join(', '));
+    $(missing[0]).focus();
+    return;
+  }
+
+  const btn = $('submitBtn');
+  btn.disabled = true;
+  btn.textContent = '… Scoring';
+  try {
+    const res = await fetch('/score', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(buildPayload()) });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((res.status === 422 ? 'HTTP 422 — ' : `HTTP ${res.status} — `) + formatDetail(body.detail ?? body));
+    setLamp(true);
+    renderResult(body);
+  } catch (err) {
+    showError('REQUEST FAILED', err.message);
+    $('results').hidden = true;   // don't leave the previous applicant's result looking current
+    $('idle').hidden = false;
+    $('resultMeta').textContent = '—';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '▶ Score applicant';
+  }
+});
+
+// ── Render ─────────────────────────────────────────────────
+let shownScore = DIAL_MIN;
+function countTo(target) {
+  const el = $('scoreValue'), start = shownScore, t0 = performance.now(), dur = 900;
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) { el.textContent = target; shownScore = target; return; }
+  (function step(t) {
+    const k = Math.min(1, (t - t0) / dur), eased = 1 - Math.pow(1 - k, 3);
+    el.textContent = Math.round(start + (target - start) * eased);
+    if (k < 1) requestAnimationFrame(step); else shownScore = target;
+  })(t0);
+}
+
+function renderResult(body) {
+  $('idle').hidden = true;
+  $('results').hidden = false;
+
+  $('needle').style.transform = `rotate(${angleFor(body.CREDIT_SCORE)}deg)`;
+  countTo(body.CREDIT_SCORE);
+  $('pdValue').textContent = (body.PROBA_DEFAULT * 100).toFixed(2) + '%';
+
+  const letter = (body.RISK_BAND || '').trim().charAt(0);
+  const band = BAND_BY_LETTER[letter];
+  $('bandBox').style.background = band ? band.color : 'var(--muted)';
+  $('bandLetter').textContent = letter || '–';
+  $('bandLabel').textContent = (body.RISK_BAND || '').replace(/^[A-E]\s*[—–-]\s*/, '');
+
+  const codes = body.REASON_CODES || [];
+  const maxAbs = Math.max(1, ...codes.map(c => Math.abs(c.points)));
+  $('bars').innerHTML = codes.map(c => {
+    const w = (Math.abs(c.points) / maxAbs) * 50;
+    const pos = c.points >= 0;
+    return `<div class="rc">
+      <div class="rc-name">${c.feature}</div>
+      <div class="rc-val" style="color:${pos ? 'var(--teal)' : 'var(--red)'}">${pos ? '+' : ''}${c.points.toFixed(1)}</div>
+      <div class="rc-bar"><span class="fill ${pos ? 'pos' : 'neg'}" style="${pos ? 'left' : 'right'}:50%;width:${w}%"></span><span class="axis"></span></div>
+    </div>`;
+  }).join('') || '<p class="hint">No reason codes returned.</p>';
+
+  // HAS_CREDIT_HISTORY comes from the server (did this ID match any history row?),
+  // not from the reason codes: a blank history feature can still be a top reason,
+  // because the model has a learned path for missing values.
+  $('ticket').innerHTML = body.HAS_CREDIT_HISTORY
+    ? '<b>■ HISTORY ON FILE</b><span>Bureau, previous-loan, POS, installment and credit-card features use this applicant\'s real records.</span>'
+    : '<b>□ NO HISTORY</b><span>No records for this ID, so all 13 history features are blank. Any that appear above reflect the model\'s handling of missing values, not real behaviour.</span>';
+
+  $('resultMeta').textContent = 'ID ' + body.SK_ID_CURR;
+  $('metaId').textContent = 'SK_ID_CURR ' + body.SK_ID_CURR;
+  $('metaTime').textContent = 'Scored ' + new Date().toLocaleTimeString();
+}
+
+loadPreset('existing');
+</script>
+</body>
+</html>

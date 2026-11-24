@@ -1,29 +1,37 @@
 #!/usr/bin/env python
 """
-Batch scoring: shared score_applicants() + the CLI that runs it, both
-manually and via Airflow.
+Batch scoring in one go, without Airflow -- plus the scoring function the
+other entry points share.
 
-Manual:
+Run it with the project environment active:
+
     python score_model_input.py --application-date 2026-07-31
 
-Airflow (inference_batch_dag.py runs the exact same command):
-    python score_model_input.py --application-date {{ ds }}
+Input
+-----
+- DATA_ROOT/Inference/BatchInput/<date>/application.csv  the new applicants
+- DATA_ROOT/Input/  the credit-history tables (bureau, previous applications,
+  POS, repayments, credit cards). These cover everyone Home Credit has ever
+  seen and are shared by every batch; only application.csv changes per batch.
 
-Only application.csv is date-partitioned (a new batch of applicants each
-run); bureau/previous_application/pos_cash/installments are shared credit
-history and are always read from DATA_ROOT/Input, not re-dumped per run.
+Output (DATA_ROOT/Inference/BatchOutput/<date>/)
+------------------------------------------------
+- scored_applicants.parquet  PD, credit score and risk band per applicant
+- band_summary.csv           applicants, mean score and mean PD per risk band
+- reason_codes.parquet       credit-score points per feature, per applicant
 
-score_applicants() below is also the one function realtime_api.py calls,
-so batch and real-time scoring can't silently diverge -- both paths go
-through the same model load, PDO transform, and risk-band assignment.
+How it relates to the other entry points
+----------------------------------------
+- The Airflow DAG (dags/inference_batch_dag.py) doesn't run this script. It
+  runs the same steps as separate tasks (utils/batch_feature_tasks.py), using
+  score_applicants() and build_band_summary() from here, and writes the
+  same files.
+- The real-time API (realtime_api.py) also uses score_applicants(), so batch
+  and real-time scores always come from the same model and formulas.
 
-Outputs:
-    DATA_ROOT/Inference/BatchOutput/<application-date>/scored_applicants.parquet
-    DATA_ROOT/Inference/BatchOutput/<application-date>/band_summary.csv
-
-Prerequisite: HomeCredit_Scorecard_Model must have a version with the
-"prod" alias assigned (done manually in the MLflow UI after review -- see
-02_training_LightGBM_v3.ipynb section 8), and selected_features.xlsx must exist.
+Before running: a model version must have the "prod" alias in MLflow (you
+set it in the MLflow UI), and selected_features.xlsx must list that
+version's features.
 """
 import argparse
 import logging
@@ -34,16 +42,15 @@ from pathlib import Path
 
 import pandas as pd
 
-# Same env-var pattern as the other scripts in this package, so this drops
-# into the same layout without edits.
+# Make src/Inference importable when this is run from another folder
 SRC_ROOT = os.environ.get("HOMECREDIT_SRC_DIR", r"a:\Dominic\My Projects\Home Credit\src")
 INFERENCE_PKG_SRC = os.environ.get("HOME_CREDIT_INFERENCE_SRC", os.path.join(SRC_ROOT, "Inference"))
 sys.path.insert(0, INFERENCE_PKG_SRC)
 
-import config  # noqa: E402
-import pdo_scorecard  # noqa: E402
-from explainability import explain_contributions  # noqa: E402
-from model import predict_proba  # noqa: E402
+from utils import config  # noqa: E402
+from utils import pdo_scorecard  # noqa: E402
+from utils.explainability import explain_contributions  # noqa: E402
+from utils.model import predict_proba  # noqa: E402
 from features.pipeline import assemble_features, RAW_COLUMN_REQUIREMENTS  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -52,25 +59,28 @@ logger = logging.getLogger(__name__)
 
 def score_applicants(feature_df: pd.DataFrame) -> pd.DataFrame:
     """
-    Score applicants based on the features in feature_df (output of
-    features.pipeline.assemble_features). Also called directly by
-    realtime_api.py -- keeping this one function shared is what actually
-    guarantees batch and real-time give identical scores for identical
-    inputs.
+    Feature table in, scores out: PD -> credit score -> risk band.
+
+    feature_df: the output of features.pipeline.assemble_features (or the
+    joined feature file in the Airflow DAG). Used by every way of scoring --
+    this script, the Airflow DAG and the real-time API -- which is what
+    guarantees they give the same results for the same input.
+
+    Returns one row per applicant: SK_ID_CURR, PROBA_DEFAULT, score, Risk_Band.
     """
-    proba = predict_proba(feature_df)  # pd.Series, indexed by SK_ID_CURR
+    proba = predict_proba(feature_df)  # Series of PDs, indexed by SK_ID_CURR
     score = pd.Series(pdo_scorecard.proba_to_score(proba.to_numpy()), index=proba.index, name="score")
     band = pd.Series(pdo_scorecard.score_to_risk_band(score.to_numpy()), index=proba.index, name="Risk_Band")
 
-    # Column names ("score", "Risk_Band") match Credit_Scoring.ipynb so this
-    # output can be concatenated directly with your scorecard analysis.
+    # Column names "score" and "Risk_Band" match Credit_Scoring.ipynb, so the
+    # results can be compared with the scorecard analysis directly
     result = pd.concat([proba, score, band], axis=1)
     result.index.name = "SK_ID_CURR"
     return result.reset_index()
 
 
-# application.csv lives under the dated BatchInput dir; the rest are shared
-# history read from DATA_ROOT/Input regardless of application-date.
+# Raw file name for each table. application.csv is read from the dated
+# BatchInput/<date>/ folder; the rest from DATA_ROOT/Input.
 TABLE_FILES = {
     "application": "application.csv",
     "bureau": "bureau.csv",
@@ -82,6 +92,7 @@ TABLE_FILES = {
 
 
 def parse_date(value: str) -> str:
+    """Accept only YYYY-MM-DD dates for --application-date."""
     try:
         datetime.strptime(value, "%Y-%m-%d")
     except ValueError as e:
@@ -91,21 +102,15 @@ def parse_date(value: str) -> str:
 
 def load_shared_history_tables(raw_data_dir: Path) -> dict[str, pd.DataFrame]:
     """
-    Loads every raw table EXCEPT application -- bureau/previous_application/
-    pos_cash/installments/credit_card, Home Credit's full history for every
-    applicant it's ever seen, not date-partitioned like application.csv.
+    Load the five credit-history tables (everything except application).
 
-    Split out of load_raw_tables() so realtime_api.py can load and cache
-    these once at startup (functools.lru_cache), then filter each table to
-    a single SK_ID_CURR per request, instead of only ever having application-
-    form fields to work with -- see explainability.py's module docstring for
-    why real-time scoring needs this: 13 of the model's 24 features come
-    from these tables, not the application form itself.
+    These cover every applicant Home Credit has ever seen and are the same
+    for every batch. Kept separate from load_raw_tables() so the real-time
+    API can load them once at startup and reuse them for every request.
 
-    Reads only the raw columns each feature module actually consumes (see
-    features/pipeline.py::RAW_COLUMN_REQUIREMENTS) instead of full tables --
-    these are multi-million-row CSVs, so this is a large, free memory/IO win
-    over reading every raw column.
+    Only the columns the feature code needs are read (see
+    RAW_COLUMN_REQUIREMENTS) -- these are multi-million-row files, so this
+    saves a lot of memory and time. A missing file is skipped with a warning.
     """
     tables: dict[str, pd.DataFrame] = {}
     for key, filename in TABLE_FILES.items():
@@ -125,8 +130,8 @@ def load_shared_history_tables(raw_data_dir: Path) -> dict[str, pd.DataFrame]:
 
 def load_raw_tables(app_data_dir: Path, raw_data_dir: Path) -> dict[str, pd.DataFrame]:
     """
-    application.csv (this batch's new applicants) + the shared history
-    tables (every applicant Home Credit has ever seen).
+    This batch's application.csv plus the shared history tables. Fails if
+    application.csv isn't there.
     """
     app_path = app_data_dir / TABLE_FILES["application"]
     if not app_path.exists():
@@ -142,6 +147,7 @@ def load_raw_tables(app_data_dir: Path, raw_data_dir: Path) -> dict[str, pd.Data
 
 
 def build_band_summary(scored_df: pd.DataFrame) -> pd.DataFrame:
+    """Per risk band: number of applicants, mean score, mean PD and share of the batch."""
     band_summary = (
         scored_df.groupby("Risk_Band", observed=True)
         .agg(
@@ -156,6 +162,7 @@ def build_band_summary(scored_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def main(application_date: str) -> None:
+    """Score one batch: load the data, build features, score, explain, and save the three output files."""
     data_root = Path(config.DATA_ROOT)
     raw_data_dir = data_root / "Input"
     app_data_dir = data_root / "Inference" / "BatchInput" / application_date
@@ -185,17 +192,14 @@ def main(application_date: str) -> None:
         scored_df["score"].max(),
     )
 
-    # A batch whose band distribution is wildly different from the
-    # validation-set distribution (Credit_Scoring.ipynb section 5) is worth
-    # a second look before it feeds downstream decisions -- could be a
-    # genuinely different applicant pool, or a feature-assembly bug upstream.
+    # Logged so you can sanity-check the band mix: a batch very different from
+    # the test set's mix (Credit_Scoring.ipynb section 5) may be a genuinely
+    # different set of applicants -- or a problem in the feature code.
     band_summary = build_band_summary(scored_df)
     logger.info("Risk band distribution:\n%s", band_summary.to_string(index=False, float_format="{:.4f}".format))
 
-    # Per-attribute points breakdown -- reason codes for every applicant in
-    # this batch, not just a sample. Computed from the same feature_df/model
-    # already used to score above; failing here never changes scored_df,
-    # since explain_contributions() only reads from the trained model.
+    # Points per feature for every applicant (reason codes). Worked out from
+    # the same features and model after scoring; never changes the scores.
     reason_codes_df = explain_contributions(feature_df)
     logger.info("Reason codes shape: %s", reason_codes_df.shape)
 
@@ -224,6 +228,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
+    # Exit with an error code on failure, so a scheduler or script calling this notices
     try:
         main(args.application_date)
     except Exception:
