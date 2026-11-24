@@ -1,36 +1,29 @@
 #!/usr/bin/env python
 """
-One-off migration: copy every experiment/run and the model registry from the
-current MLflow file store (DATA_ROOT/mlruns) into a new SQLite-backed store
-(DATA_ROOT/mlflow.db) -- what MLflow's own deprecation warnings ask for
-("The filesystem tracking backend ... is deprecated ... consider ...
-'sqlite:///mlflow.db'").
+One-off migration of MLflow from the old folder-based store to SQLite.
+Already done: this is what created DATA_ROOT/mlflow.db. Kept for reference;
+it refuses to run again while mlflow.db exists.
 
-Only METADATA moves (params, metrics with full history, tags, run status/
-timestamps, registered model versions, aliases). Artifacts (the actual model
-files, plots, etc.) are left exactly where they are -- this only changes
-where params/metrics/registry ENTRIES are recorded, not where the files
-they point to live. That also means this does NOT fix the separate,
-pre-existing issue where those files are recorded under a Docker-container-
-absolute path (file:///data/mlruns/...) and can't be loaded directly from a
-different host -- see src/Inference/README.md's "Known gaps" section.
+What it did
+-----------
+Copied every experiment, run and registered model from the old file store
+(DATA_ROOT/mlruns) into a new SQLite database (DATA_ROOT/mlflow.db), as
+MLflow's deprecation warning for the file store recommends.
 
-Registered model versions in this MLflow install use the 3.x "Logged Model"
-source scheme (source="models:/m-<id>"), which -- confirmed by testing --
-requires that Logged Model to actually exist in whatever store you're
-registering against. Rather than also recreating Logged Model entities
-(a materially bigger, newer MLflow concept with its own params/metrics that
-would just duplicate what the parent run already has), each version is
-re-registered with `source` rewritten to the Logged Model's own real
-artifact_location (a plain file:// path, confirmed NOT to require any
-registry lookup) -- same underlying files, same portability characteristics,
-just resolved directly instead of through an intermediate registry entry
-this script isn't recreating.
+Only the records moved: parameters, metrics (with their full history),
+tags, run status and times, registered model versions and aliases. The
+files themselves (models, plots) stayed where they were in mlruns/. So
+versions registered before the switch still point at file:///data/mlruns/...
+and only load inside Docker -- see "Known gaps" in the README.
 
-Safe to run: only reads the existing file store and writes a brand-new
-sqlite file. Doesn't touch or delete anything under mlruns/. Re-runnable
-if MLFLOW_SQLITE_PATH doesn't already exist; refuses to overwrite one that
-does (see main() below) rather than silently duplicating every run.
+One detail: MLflow 3 registers a model version with a source like
+"models:/m-<id>", which only works if a matching "Logged Model" record also
+exists. Instead of recreating those records, each version was re-registered
+with its source set to the model's real folder (a plain file:// path) --
+the same files, just referenced directly.
+
+Safety: it only reads the old store and writes a brand-new SQLite file;
+nothing under mlruns/ is changed or deleted.
 
 Usage:
     python scripts/migrate_mlflow_to_sqlite.py
@@ -43,8 +36,8 @@ from mlflow.entities import Metric, Param, RunTag, ViewType
 from mlflow.tracking import MlflowClient
 
 DATA_ROOT = os.environ.get("HOMECREDIT_DATA_ROOT", r"a:\Dominic\My Projects\Home Credit\data")
-OLD_MLRUNS_DIR = os.path.join(DATA_ROOT, "mlruns")
-SQLITE_PATH = os.path.join(DATA_ROOT, "mlflow.db")
+OLD_MLRUNS_DIR = os.path.join(DATA_ROOT, "mlruns")      # old store (read only)
+SQLITE_PATH = os.path.join(DATA_ROOT, "mlflow.db")      # new store (created)
 
 OLD_TRACKING_URI = "file:" + OLD_MLRUNS_DIR.replace("\\", "/")
 NEW_TRACKING_URI = "sqlite:///" + SQLITE_PATH.replace("\\", "/")
@@ -52,11 +45,11 @@ NEW_TRACKING_URI = "sqlite:///" + SQLITE_PATH.replace("\\", "/")
 
 def resolve_logged_model_artifact_path(experiment_dir: str, model_id: str) -> str:
     """
-    A registered version's source is "models:/m-<id>" -- a reference to a
-    Logged Model entity, not a direct path. Reads that Logged Model's own
-    meta.yaml (DATA_ROOT/mlruns/<experiment_id>/models/<model_id>/meta.yaml)
-    for its real artifact_location instead, so the migrated version doesn't
-    depend on a Logged Model row existing in the new store.
+    Find the real folder behind a "models:/m-<id>" source.
+
+    Reads the model's meta.yaml in the old store
+    (mlruns/<experiment_id>/models/<model_id>/meta.yaml) and returns its
+    artifact_location, so the migrated version can point straight at the files.
     """
     meta_path = os.path.join(experiment_dir, "models", model_id, "meta.yaml")
     with open(meta_path, encoding="utf-8") as f:
@@ -65,7 +58,11 @@ def resolve_logged_model_artifact_path(experiment_dir: str, model_id: str) -> st
 
 
 def migrate_runs(src: MlflowClient, dst: MlflowClient) -> dict:
-    """Returns {old_run_id: new_run_id} for every migrated run."""
+    """
+    Copy every run (except those in MLflow's empty "Default" experiment) into
+    the new store. Runs get new ids there, so this returns
+    {old_run_id: new_run_id} for the registry step to use.
+    """
     run_id_map = {}
     experiments = [e for e in src.search_experiments(view_type=ViewType.ALL) if e.experiment_id != "0"]
 
@@ -73,8 +70,8 @@ def migrate_runs(src: MlflowClient, dst: MlflowClient) -> dict:
         print(f"\n=== Experiment: {exp.name} ({exp.experiment_id}) ===")
         dst_exp = dst.get_experiment_by_name(exp.name)
         if dst_exp is None:
-            # Keep using the same shared artifact folder going forward --
-            # this migration only ever touches the metadata store.
+            # Point the new experiment at the same mlruns/ folder, so the
+            # files stay where they are -- only the records move.
             new_exp_id = dst.create_experiment(exp.name, artifact_location=f"file:{OLD_MLRUNS_DIR}".replace("\\", "/"))
             print(f"Created destination experiment id={new_exp_id}")
         else:
@@ -86,6 +83,8 @@ def migrate_runs(src: MlflowClient, dst: MlflowClient) -> dict:
         print(f"{len(runs)} run(s) to migrate")
 
         for old_run in runs:
+            # Copy the tags (the run name is set separately below) and record
+            # where the run came from
             tags = {k: v for k, v in old_run.data.tags.items() if k != "mlflow.runName"}
             tags["mlflow.migrated_from_run_id"] = old_run.info.run_id
             tags["mlflow.migrated_from_tracking_uri"] = OLD_TRACKING_URI
@@ -98,6 +97,7 @@ def migrate_runs(src: MlflowClient, dst: MlflowClient) -> dict:
             )
             new_run_id = new_run.info.run_id
 
+            # Parameters, plus every logged value of every metric (not just the latest)
             params = [Param(k, v) for k, v in old_run.data.params.items()]
             metrics = []
             for key in old_run.data.metrics:
@@ -116,6 +116,11 @@ def migrate_runs(src: MlflowClient, dst: MlflowClient) -> dict:
 
 
 def migrate_registry(src: MlflowClient, dst: MlflowClient, run_id_map: dict) -> None:
+    """
+    Recreate each registered model and its versions (oldest first, so the
+    version numbers come out the same), linked to the migrated runs, then
+    reapply aliases such as "prod".
+    """
     models = src.search_registered_models()
     print(f"\n=== {len(models)} registered model(s) ===")
 
@@ -152,9 +157,8 @@ def migrate_registry(src: MlflowClient, dst: MlflowClient, run_id_map: dict) -> 
                 tags=v.tags,
                 description=v.description,
             )
-            # search_model_versions() returns .version as an int, but
-            # RegisteredModel.aliases below maps alias -> version as a str --
-            # normalize to str so the aliases loop's lookup actually hits.
+            # Keyed by the version as text, because the aliases below give
+            # version numbers as text while v.version is a number
             version_map[str(v.version)] = new_version
             print(f"  v{v.version} -> v{new_version.version}  source={real_source}")
 
@@ -164,6 +168,7 @@ def migrate_registry(src: MlflowClient, dst: MlflowClient, run_id_map: dict) -> 
 
 
 def main():
+    # Never write into an existing database -- that would duplicate every run
     if os.path.exists(SQLITE_PATH):
         print(f"Refusing to run: {SQLITE_PATH} already exists.")
         print("Delete it first if you really want to re-migrate from scratch.")
@@ -180,7 +185,7 @@ def main():
 
     print(f"\nDone. {len(run_id_map)} run(s) migrated to {SQLITE_PATH}")
     print("Set MLFLOW_TRACKING_URI to the sqlite URI above in docker-compose.yml, "
-          "the training notebooks, and src/Inference/config.py before relying on this.")
+          "the training notebooks, and src/Inference/utils/config.py before relying on this.")
 
 
 if __name__ == "__main__":

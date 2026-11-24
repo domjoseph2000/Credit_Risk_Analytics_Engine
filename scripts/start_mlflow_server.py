@@ -1,12 +1,14 @@
 #!/usr/bin/env python
 """
 Start the MLflow tracking server directly on Windows (no Docker needed), for
-running the training notebooks interactively.
+running the training notebooks or the inference code on your own machine.
 
-Same setup as the docker-compose `mlflow` service: run metadata in
-DATA_ROOT/mlflow.db, model files and plots stored under DATA_ROOT/mlruns and
-uploaded/downloaded through the server. Notebooks connect to
-http://localhost:5000 by default.
+Same setup as the docker-compose `mlflow` service:
+- run details (parameters, metrics, registered models) go in DATA_ROOT/mlflow.db
+- model files and plots are stored under DATA_ROOT/mlruns, and clients
+  upload/download them through this server rather than reading the folder
+Notebooks and inference connect to http://localhost:5000 by default; the UI
+is at the same address.
 
 Keep this terminal open while you work; stop the server with Ctrl+C. Don't
 run it at the same time as the Docker `mlflow` service -- both use port 5000.
@@ -25,6 +27,8 @@ PORT = "5000"
 
 
 def main():
+    # Runs MLflow with the same Python that's running this script, so the
+    # server uses your project environment's MLflow
     cmd = [
         sys.executable, "-m", "mlflow", "server",
         "--backend-store-uri", f"sqlite:///{DB_PATH}",

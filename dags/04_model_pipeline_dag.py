@@ -1,33 +1,48 @@
 """
-Home Credit – Model Pipeline DAG (tuning → training → segmentation)
-====================================================================
-One run builds and evaluates one model version:
+Home Credit – 04 Model Pipeline DAG (tuning → training → segmentation)
+======================================================================
+Step 4 of the training pipeline: builds and evaluates ONE model version per run.
 
     check_inputs → tune_model → train_model → run_segmentation
 
-Scoring (PDO scorecard, risk bands) is not part of this DAG: it's only for the
-final model you pick after comparing versions -- run 05_scoring for that.
+What's a "model version"?
+-------------------------
+A folder under src/Training/04_Model-Development/ (e.g. LightGBM_v4, XGB_v3)
+holding exactly one tuning notebook (01_tuning*.ipynb) and one training
+notebook (02_training*.ipynb). The DAG finds the folders and notebooks by
+itself, so adding a version is just copying a folder and renaming its
+notebooks -- no DAG edit needed.
 
-A model version is a folder under src/Training/04_Model-Development/ holding
-exactly one tuning notebook (01_tuning*.ipynb) and one training notebook
-(02_training*.ipynb). The DAG discovers the versions and their notebooks from
-those folders, so adding a version needs no DAG edit, and tuning/training
-can't be mismatched.
+Tasks
+-----
+1. check_inputs     -- stops early with a clear message if the chosen options
+                       can't work (e.g. 'previous' tuning with no earlier search).
+2. tune_model       -- runs the tuning notebook. It picks the version's feature
+                       list (saved as selected_features.json) and, depending on
+                       `tuning`, searches for the best hyperparameters (saved as
+                       *_resolved_best.json). Training needs both files.
+3. train_model      -- runs the training notebook: cross-validation, the final
+                       model, test-set evaluation, plots, and MLflow logging and
+                       registration.
+4. run_segmentation -- checks how well the model works within subgroups of
+                       applicants (05_Segmentation-Analysis).
 
-Tuning and training are one because training depends on tuning's
-outputs for the same version -- `selected_features.json` (the feature list) and
-`*_resolved_best.json` (hyperparameters).
+Building the scorecard (PDO score, risk bands) is not part of this DAG: that's
+only done for the model you finally choose, with 05_scoring.
 
-Params:
+Params (set on the "Trigger DAG" screen)
+----------------------------------------
+- `model_folder`: the version to run; defaults to the most recently trained one.
 - `tuning`:
     'search'   -- full Hyperopt search (hours), then train
     'previous' -- reuse the saved hyperparameters, refresh the feature list (minutes)
     'skip'     -- no tuning step; only allowed once this version's tuning outputs exist
-- `run_training` / `run_segmentation`: stop early (e.g. run_training=false to
-  only tune).
+- `run_training` / `run_segmentation`: set false to stop early (e.g.
+  run_training=false to only tune).
 
-Training always uses the tuned hyperparameters here; the training notebooks'
-HYPERPARAMS_SOURCE='defaults' switch (library defaults, a baseline) is for manual runs.
+Under Airflow, training always uses the tuned hyperparameters. The training
+notebooks' HYPERPARAMS_SOURCE='defaults' option (library defaults, as a
+baseline) is only for running a notebook by hand.
 """
 from datetime import datetime, timedelta
 import glob
@@ -41,16 +56,33 @@ from airflow.operators.python import PythonOperator
 import papermill as pm
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
+# Inside the container: data/ is mounted at /data and src/ at /src.
 DATA_ROOT = os.environ.get("HOMECREDIT_DATA_ROOT", "/data")
 SRC_DIR = os.environ.get("HOMECREDIT_SRC_DIR", "/src")
-MODEL_DIR = os.path.join(SRC_DIR, "Training", "04_Model-Development")
-HPO_ROOT = os.path.join(DATA_ROOT, "Model-Training", "HyperParameters")
-TUNING_PREFIX, TRAINING_PREFIX = "01_tuning", "02_training"
+MODEL_DIR = os.path.join(SRC_DIR, "Training", "04_Model-Development")   # one folder per model version
+HPO_ROOT = os.path.join(DATA_ROOT, "Model-Training", "HyperParameters")  # tuning outputs, per version
+TUNING_PREFIX, TRAINING_PREFIX = "01_tuning", "02_training"             # how the two notebooks are named
 
-# Model versions = the folders under 04_Model-Development
+# Model versions = the folders under 04_Model-Development (re-read whenever
+# Airflow re-parses this file, so a new folder appears in the dropdown by itself)
 MODEL_FOLDERS = sorted(
     d for d in (os.listdir(MODEL_DIR) if os.path.isdir(MODEL_DIR) else [])
     if os.path.isdir(os.path.join(MODEL_DIR, d)) and not d.startswith(".")
+)
+
+
+def _predictions_path(model_folder: str) -> str:
+    """Written by the training notebook, so its presence/age marks when a version was last trained."""
+    return os.path.join(DATA_ROOT, "Model-Training", "ModelOutput", model_folder, "test_predictions.parquet")
+
+
+# Default = the most recently trained version (newest test_predictions.parquet),
+# re-evaluated each time Airflow parses this file. Falls back to the first version
+# if none has been trained (or the data folder isn't visible at parse time).
+DEFAULT_MODEL_FOLDER = max(
+    (d for d in MODEL_FOLDERS if os.path.exists(_predictions_path(d))),
+    key=lambda d: os.path.getmtime(_predictions_path(d)),
+    default=MODEL_FOLDERS[0] if MODEL_FOLDERS else "LightGBM_v1",
 )
 
 
@@ -66,6 +98,7 @@ def find_notebook(model_folder: str, prefix: str) -> str:
     return os.path.join(folder, notebooks[0])
 
 
+# Settings shared by every task: one retry after 5 minutes, no emails
 DEFAULT_ARGS = {
     "owner": "Admin",
     "depends_on_past": False,
@@ -75,15 +108,17 @@ DEFAULT_ARGS = {
     "email_on_retry": False,
 }
 
-# Dropdown of discovered versions (free text if the source folders aren't visible at parse time)
+# Options on the "Trigger DAG" screen. model_folder is a dropdown of the
+# versions found above (a free-text box if none were found at parse time).
 _model_folder_choices = {"enum": MODEL_FOLDERS} if MODEL_FOLDERS else {}
 UI_PARAMS = {
     "model_folder": Param(
-        default="LightGBM_v1",
+        default=DEFAULT_MODEL_FOLDER,
         type="string",
         title="Model version",
         description="A folder under src/Training/04_Model-Development/. Also names "
-        "data/Model-Training/ModelOutput/<model_folder>/, which segmentation reads.",
+        "data/Model-Training/ModelOutput/<model_folder>/, which segmentation reads. "
+        "Defaults to the most recently trained version.",
         **_model_folder_choices,
     ),
     "tuning": Param(
@@ -108,7 +143,10 @@ UI_PARAMS = {
 
 
 def _execute(task_id: str, input_nb: str, context) -> None:
-    """Run one notebook with papermill; the executed copy is kept for audit."""
+    """
+    Run one notebook with papermill. The executed copy, with all its printed
+    output, is saved as notebook_outputs/<task>__<model_folder>__<run date>.ipynb.
+    """
     out_dir = os.path.join(DATA_ROOT, "Model-Training", "notebook_outputs")
     os.makedirs(out_dir, exist_ok=True)
     run_date = context.get("ds_nodash") or datetime.now().strftime("%Y%m%d")
@@ -121,23 +159,31 @@ def _execute(task_id: str, input_nb: str, context) -> None:
         input_path=input_nb,
         output_path=output_nb,
         kernel_name="python3",
-        parameters={},  # notebooks read their settings from env vars
+        parameters={},  # none needed -- the notebooks read their settings from env vars
         progress_bar=False,
-        request_save_on_cell_execute=True,
+        # Show the notebook's printed output live in the Airflow task log (e.g.
+        # tuning's per-trial lines); the saved copy only updates per finished cell
+        log_output=True,
+        request_save_on_cell_execute=True,  # save after every cell, so a failed run still shows how far it got
     )
     print(f"[{task_id}] ✓ Complete")
 
 
-# ── Task callables ────────────────────────────────────────────────────────────
+# ── Task functions ────────────────────────────────────────────────────────────
 def check_inputs(**context) -> None:
-    """Fail fast, with a clear message, if this run can't work -- before any notebook starts."""
+    """
+    Stop the run early, with a clear message, if the chosen options can't work
+    -- before any long notebook starts. Checks that the version folder has its
+    two notebooks, and that the tuning outputs a 'previous' or 'skip' run
+    depends on already exist.
+    """
     params = context["params"]
     model_folder, tuning = params["model_folder"], params["tuning"]
     tuning_nb = find_notebook(model_folder, TUNING_PREFIX)
     training_nb = find_notebook(model_folder, TRAINING_PREFIX)
     hpo_dir = os.path.join(HPO_ROOT, model_folder)
-    has_hyperparams = bool(glob.glob(os.path.join(hpo_dir, "*_resolved_best.json")))
-    has_features = os.path.exists(os.path.join(hpo_dir, "selected_features.json"))
+    has_hyperparams = bool(glob.glob(os.path.join(hpo_dir, "*_resolved_best.json")))   # from a past search
+    has_features = os.path.exists(os.path.join(hpo_dir, "selected_features.json"))     # from a past tuning run
     print(f"{model_folder}: tuning={tuning} | tuning notebook {os.path.basename(tuning_nb)} | "
           f"training notebook {os.path.basename(training_nb)} | saved hyperparameters={has_hyperparams}, "
           f"saved feature list={has_features}")
@@ -154,22 +200,27 @@ def check_inputs(**context) -> None:
 
 def run_tuning_notebook(task_id: str, **context) -> None:
     params = context["params"]
-    # Read by the tuning notebook's HYPERPARAMS_SOURCE -- set before execute_notebook so
-    # the kernel subprocess inherits it (same pattern as HOMECREDIT_DATA_ROOT)
+    # Tell the tuning notebook which mode to use ('search' or 'previous'). It's
+    # set as an environment variable before the notebook starts, because the
+    # notebook's Python process inherits this process's environment.
     os.environ["HPO_HYPERPARAMS_SOURCE"] = params["tuning"]
     _execute(task_id, find_notebook(params["model_folder"], TUNING_PREFIX), context)
 
 
 def run_training_notebook(task_id: str, **context) -> None:
-    # Always the tuned hyperparameters under Airflow (defaults are for manual baseline runs)
+    # Under Airflow, always train with the tuned hyperparameters
+    # ('defaults' is only for baseline runs by hand)
     os.environ["HOMECREDIT_HYPERPARAMS"] = "tuned"
     _execute(task_id, find_notebook(context["params"]["model_folder"], TRAINING_PREFIX), context)
 
 
 def run_segmentation_notebook(task_id: str, **context) -> None:
-    """Segmentation_Analysis.ipynb, pointed at this run's model_folder via the same env var
-    Credit_Scoring.ipynb uses -- one variable selects which model's test_predictions.parquet
-    both notebooks read."""
+    """
+    Run Segmentation_Analysis.ipynb for this run's model_folder. The folder is
+    passed in HOMECREDIT_SCORING_MODEL_FOLDER, the same variable
+    Credit_Scoring.ipynb uses, so one setting tells both notebooks which
+    model's test_predictions.parquet to read.
+    """
     os.environ["HOMECREDIT_SCORING_MODEL_FOLDER"] = context["params"]["model_folder"]
     _execute(task_id, os.path.join(SRC_DIR, "Training", "05_Segmentation-Analysis", "Segmentation_Analysis.ipynb"), context)
 
@@ -179,9 +230,9 @@ with DAG(
     dag_id="04_model_pipeline",
     description="Tune, train and segment one model version -- one linear pipeline",
     default_args=DEFAULT_ARGS,
-    # Even with schedule=None, Airflow requires a start_date.
+    # Airflow requires a start date even for a DAG with no schedule
     start_date=datetime(2024, 1, 1),
-    schedule=None,  # triggered by 03_mds_creation_and_multicollinearity_test, or manually
+    schedule=None,  # started by 03_mds_creation_and_multicollinearity_test, or manually
     params=UI_PARAMS,
     max_active_runs=1,
     catchup=False,
@@ -189,6 +240,10 @@ with DAG(
 ) as dag:
 
     task_check_inputs = PythonOperator(task_id="check_inputs", python_callable=check_inputs)
+
+    # Each stage below has the same shape: a branch task that returns the id
+    # of the task to run next, the real task, and an empty "skip" task.
+    # (doc_md is the task description shown in the Airflow UI.)
 
     # ── Tuning ──
     @task.branch
@@ -200,7 +255,7 @@ with DAG(
         task_id="tune_model",
         python_callable=run_tuning_notebook,
         op_kwargs={"task_id": "tune_model"},
-        execution_timeout=timedelta(hours=6),
+        execution_timeout=timedelta(hours=6),   # a full search can take hours; stop it after 6
         doc_md="""
         **Hyperparameter tuning** -- runs this version's tuning notebook: applies its
         feature selection rule (saved to `selected_features.json`) and, with
@@ -208,7 +263,8 @@ with DAG(
         """,
     )
     skip_tuning = EmptyOperator(task_id="skip_tuning")
-    # Continues after whichever branch ran -- a skipped task isn't a failure
+    # Carries on after whichever of tune_model / skip_tuning ran -- a skipped
+    # task counts as fine here, only a failure stops the run
     tuning_done = EmptyOperator(task_id="tuning_done", trigger_rule="none_failed_min_one_success")
 
     # ── Training ──
@@ -229,7 +285,7 @@ with DAG(
     )
     skip_training = EmptyOperator(task_id="skip_training")
 
-    # ── Segmentation analysis ──
+    # ── Segmentation analysis (only after training) ──
     @task.branch
     def choose_segmentation(**context):
         return "run_segmentation" if context["params"]["run_segmentation"] else "skip_segmentation"
@@ -246,6 +302,7 @@ with DAG(
     )
     skip_segmentation = EmptyOperator(task_id="skip_segmentation")
 
+    # Task order
     task_check_inputs >> branch_tuning >> [tune_model, skip_tuning] >> tuning_done
     tuning_done >> branch_training >> [train_model, skip_training]
     train_model >> branch_segmentation >> [run_segmentation, skip_segmentation]
